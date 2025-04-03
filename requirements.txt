@@ -1,2 +1,9 @@
 python-telegram-bot==20.3
 requests
+beautifulsoup4
+lxml
+html5lib
+json5
+regex
+logging
+asyncio

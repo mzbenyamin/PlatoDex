@@ -1,3 +1,5 @@
 python-telegram-bot[job-queue]==20.7
 requests==2.31.0
 beautifulsoup4==4.12.2
+fastapi==0.115.4
+uvicorn==0.32.0

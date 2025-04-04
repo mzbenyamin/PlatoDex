@@ -384,8 +384,8 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
                 img.save(gif_buffer, format='GIF', save_all=True, optimize=True)
                 gif_buffer.seek(0)
                 
-                # ایجاد InputFile با نام فایل و MIME type
-                input_file = InputFile(gif_buffer, filename="animation.gif", mime_type="image/gif")
+                # ایجاد InputFile با نام فایل (بدون mime_type)
+                input_file = InputFile(gif_buffer, filename="animation.gif")
                 
                 # ارسال به صورت انیمیشن
                 await update.message.reply_animation(

@@ -1,9 +1,3 @@
-python-telegram-bot==20.3
-requests
-beautifulsoup4
-lxml
-html5lib
-json5
-regex
-logging
-asyncio
+python-telegram-bot==20.7
+requests==2.31.0
+beautifulsoup4==4.12.2

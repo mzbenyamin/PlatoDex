@@ -1,4 +1,4 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent, InputFile
 from telegram.ext import Application, CommandHandler, ContextTypes, InlineQueryHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler
 import requests
 from bs4 import BeautifulSoup
@@ -384,9 +384,12 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
                 img.save(gif_buffer, format='GIF', save_all=True, optimize=True)
                 gif_buffer.seek(0)
                 
+                # ایجاد InputFile با نام فایل و MIME type
+                input_file = InputFile(gif_buffer, filename="animation.gif", mime_type="image/gif")
+                
                 # ارسال به صورت انیمیشن
                 await update.message.reply_animation(
-                    animation=gif_buffer,
+                    animation=input_file,
                     caption=result_text,
                     message_thread_id=thread_id
                 )

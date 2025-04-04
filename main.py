@@ -16,7 +16,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # توکن و آدرس‌ها
-TOKEN = '7764880184:AAEAp5oyNfB__Cotdmtxb9BHnWgwydRN0ME'
+TOKEN = '7574303416:AAHbsLyKNKYP5VA3UA1FIVGFGNpUae2RiqY'
 IMAGE_API_URL = 'https://pollinations.ai/prompt/'
 TEXT_API_URL = 'https://text.pollinations.ai/'
 URL = "https://platopedia.com/items"
@@ -322,14 +322,20 @@ async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE
 # تابع جدید برای جستجوی آیتم در گروه با /i
 async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("لطفاً اسم آیتم رو بعد از /i بنویس! مثلاً: /i Macaron")
+        await update.message.reply_text(
+            "لطفاً اسم آیتم رو بعد از /i بنویس! مثلاً: /i Macaron",
+            message_thread_id=update.message.message_thread_id  # اضافه کردن thread ID
+        )
         return
     
     item_name = " ".join(context.args).strip().lower()
     matching_items = [item for item in EXTRACTED_ITEMS if item_name in item["name"].lower()]
     
     if not matching_items:
-        await update.message.reply_text(f"متأسفم، آیتمی با اسم '{item_name}' پیدا نشد! 😕")
+        await update.message.reply_text(
+            f"متأسفم، آیتمی با اسم '{item_name}' پیدا نشد! 😕",
+            message_thread_id=update.message.message_thread_id  # اضافه کردن thread ID
+        )
         return
     
     item = matching_items[0]
@@ -342,12 +348,26 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
         f"💸 قیمت : {price_info}"
     )
     
+    # گرفتن thread ID از پیام کاربر
+    thread_id = update.message.message_thread_id
+    
     if item["images"]:
-        await update.message.reply_photo(photo=item["images"][0], caption=result_text)
+        await update.message.reply_photo(
+            photo=item["images"][0],
+            caption=result_text,
+            message_thread_id=thread_id  # اضافه کردن thread ID
+        )
     elif item["audios"]:
-        await update.message.reply_audio(audio=item["audios"][0]["uri"], caption=result_text)
+        await update.message.reply_audio(
+            audio=item["audios"][0]["uri"],
+            caption=result_text,
+            message_thread_id=thread_id  # اضافه کردن thread ID
+        )
     else:
-        await update.message.reply_text(result_text)
+        await update.message.reply_text(
+            result_text,
+            message_thread_id=thread_id  # اضافه کردن thread ID
+        )
 
 # مدیریت چت با AI
 async def chat_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):

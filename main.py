@@ -10,6 +10,8 @@ import asyncio
 import time
 from fastapi import FastAPI, Request
 import uvicorn
+from PIL import Image
+import io
 
 # تنظیم لاگ
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -366,14 +368,45 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
     try:
         if item["images"]:
             image_url = item["images"][0]
-            # چک کردن اینکه تصویر متحرک (GIF) هست یا نه
-            if image_url.lower().endswith('.gif'):
+            if image_url.lower().endswith('.webp'):
+                # دانلود تصویر
+                response = requests.get(image_url, timeout=10)
+                response.raise_for_status()
+                
+                # باز کردن تصویر با Pillow
+                img = Image.open(io.BytesIO(response.content))
+                
+                # چک کردن اینکه تصویر متحرکه یا نه
+                if getattr(img, "is_animated", False):
+                    # تبدیل به GIF
+                    gif_buffer = io.BytesIO()
+                    if img.mode != 'RGBA':
+                        img = img.convert('RGBA')
+                    img.save(gif_buffer, format='GIF', save_all=True, optimize=True)
+                    gif_buffer.seek(0)
+                    
+                    # ارسال به صورت انیمیشن
+                    await update.message.reply_animation(
+                        animation=gif_buffer,
+                        caption=result_text,
+                        message_thread_id=thread_id
+                    )
+                else:
+                    # اگه ثابت بود، به صورت عکس بفرست
+                    await update.message.reply_photo(
+                        photo=image_url,
+                        caption=result_text,
+                        message_thread_id=thread_id
+                    )
+            elif image_url.lower().endswith('.gif'):
+                # اگه از قبل GIF بود، مستقیم بفرست
                 await update.message.reply_animation(
                     animation=image_url,
                     caption=result_text,
                     message_thread_id=thread_id
                 )
             else:
+                # برای فرمت‌های دیگه (مثل PNG یا JPG)
                 await update.message.reply_photo(
                     photo=image_url,
                     caption=result_text,
@@ -391,7 +424,7 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
                 message_thread_id=thread_id
             )
     except Exception as e:
-        logger.error(f"خطا در ارسال پیام: {e}")
+        logger.error(f"خطا در ارسال پیام یا تبدیل تصویر: {e}")
         await update.message.reply_text(
             "یه مشکلی پیش اومد، نمی‌تونم جواب بدم! 😅 بعداً دوباره امتحان کن.",
             message_thread_id=thread_id

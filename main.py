@@ -436,9 +436,7 @@ async def chat_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
-        "🤖 چت با هوش مصنوعی فعال شد!\n\n"
-        "سلام داداش! من دستیار باحال PlatoDex-ام 😎✨\n"
-        "هر چی درمورد پلاتو بخوای بگو، با حال‌ترین جوابا رو می‌دم! 😂🚀",
+        "🤖 چت با هوش مصنوعی فعال شد!\n\n",
         reply_markup=reply_markup
     )
     return ConversationHandler.END
@@ -468,7 +466,7 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = requests.post(TEXT_API_URL, json=payload, timeout=10)
         if response.status_code == 200:
             ai_response = response.text.strip()
-            final_response = f"{ai_response} 😎✨\nچیزی دیگه می‌خوای بپرسی یا فقط اومدی منو سرگرم کنی؟ 😂🚀"
+            final_response = f"{ai_response}"
             await update.message.reply_text(final_response, reply_markup=reply_markup)
         else:
             await update.message.reply_text(

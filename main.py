@@ -8,14 +8,15 @@ import html
 import logging
 import asyncio
 import time
-import os
+from fastapi import FastAPI, Request
+import uvicorn
 
 # تنظیم لاگ
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # توکن و آدرس‌ها
-TOKEN = os.getenv("TOKEN")
+TOKEN = '7574303416:AAHbsLyKNKYP5VA3UA1FIVGFGNpUae2RiqY'
 IMAGE_API_URL = 'https://pollinations.ai/prompt/'
 TEXT_API_URL = 'https://text.pollinations.ai/'
 URL = "https://platopedia.com/items"
@@ -31,6 +32,22 @@ SYSTEM_MESSAGE = (
     "شما دستیار هوشمند PlatoDex هستید و درمورد پلاتو به کاربران کمک میکنید و به صورت خودمونی جذاب و با ایموجی "
     "حرف میزنی به صورت نسل z و کمی با طنز حرف بزن و شوخی کنه"
 )
+
+# ایجاد سرور FastAPI
+app = FastAPI()
+
+# مسیر برای دریافت آپدیت‌ها از تلگرام
+@app.post("/webhook")
+async def webhook(request: Request, application: Application = None):
+    update = await request.json()
+    update_obj = Update.de_json(update, application.bot)
+    await application.process_update(update_obj)
+    return {"status": "ok"}
+
+# مسیر ریشه برای تست
+@app.get("/")
+async def root():
+    return {"message": "PlatoDex Bot is running!"}
 
 # تابع پاکسازی متن
 def clean_text(text):
@@ -433,13 +450,17 @@ async def main():
     
     for attempt in range(max_retries):
         try:
-            app = Application.builder().token(TOKEN).read_timeout(30).write_timeout(30).connect_timeout(30).build()
+            application = Application.builder().token(TOKEN).read_timeout(30).write_timeout(30).connect_timeout(30).build()
             
-            if app.job_queue is None:
+            if application.job_queue is None:
                 logger.error("JobQueue فعال نیست!")
                 raise RuntimeError("JobQueue فعال نیست!")
             
-            schedule_scraping(app)
+            # تنظیم Webhook
+            webhook_url = "https://platodex.onrender.com/webhook"  # آدرس سرور Render + مسیر webhook
+            await application.bot.set_webhook(url=webhook_url)
+            
+            schedule_scraping(application)
             await extract_items()
             
             search_conv_handler = ConversationHandler(
@@ -477,31 +498,26 @@ async def main():
                 persistent=False
             )
             
-            app.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
-            app.add_handler(CommandHandler("i", process_item_in_group))
-            app.add_handler(search_conv_handler)
-            app.add_handler(image_conv_handler)
-            app.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
-            app.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
-            app.add_handler(InlineQueryHandler(inline_query))
-            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_message))
-            app.add_error_handler(error_handler)
+            application.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
+            application.add_handler(CommandHandler("i", process_item_in_group))
+            application.add_handler(search_conv_handler)
+            application.add_handler(image_conv_handler)
+            application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
+            application.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
+            application.add_handler(InlineQueryHandler(inline_query))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_message))
+            application.add_error_handler(error_handler)
             
             logger.info("در حال آماده‌سازی ربات...")
-            await app.initialize()
+            await application.initialize()
             logger.info("در حال شروع ربات...")
-            await app.start()
-            logger.info("ربات شروع به کار کرد...")
-            await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+            await application.start()
             
-            try:
-                await asyncio.Event().wait()
-            except KeyboardInterrupt:
-                logger.info("در حال خاموش کردن ربات...")
-                await app.updater.stop()
-                await app.stop()
-                await app.shutdown()
-            break  # اگه موفق بود، خارج می‌شیم
+            # به جای start_polling، سرور FastAPI رو اجرا می‌کنیم
+            config = uvicorn.Config(app, host="0.0.0.0", port=8000)
+            server = uvicorn.Server(config)
+            await server.serve()
+            
         except Exception as e:
             logger.error(f"خطا در تلاش {attempt + 1}/{max_retries}: {e}")
             if attempt < max_retries - 1:

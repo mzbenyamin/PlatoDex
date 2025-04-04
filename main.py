@@ -376,28 +376,20 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
                 # باز کردن تصویر با Pillow
                 img = Image.open(io.BytesIO(response.content))
                 
-                # چک کردن اینکه تصویر متحرکه یا نه
-                if getattr(img, "is_animated", False):
-                    # تبدیل به GIF
-                    gif_buffer = io.BytesIO()
-                    if img.mode != 'RGBA':
-                        img = img.convert('RGBA')
-                    img.save(gif_buffer, format='GIF', save_all=True, optimize=True)
-                    gif_buffer.seek(0)
-                    
-                    # ارسال به صورت انیمیشن
-                    await update.message.reply_animation(
-                        animation=gif_buffer,
-                        caption=result_text,
-                        message_thread_id=thread_id
-                    )
-                else:
-                    # اگه ثابت بود، به صورت عکس بفرست
-                    await update.message.reply_photo(
-                        photo=image_url,
-                        caption=result_text,
-                        message_thread_id=thread_id
-                    )
+                # تبدیل به GIF (چه متحرک باشه چه نه)
+                gif_buffer = io.BytesIO()
+                if img.mode != 'RGBA':
+                    img = img.convert('RGBA')
+                # اگه تصویر متحرکه، همه فریم‌ها رو ذخیره کن؛ اگه نه، فقط یه فریم
+                img.save(gif_buffer, format='GIF', save_all=True, optimize=True)
+                gif_buffer.seek(0)
+                
+                # ارسال به صورت انیمیشن
+                await update.message.reply_animation(
+                    animation=gif_buffer,
+                    caption=result_text,
+                    message_thread_id=thread_id
+                )
             elif image_url.lower().endswith('.gif'):
                 # اگه از قبل GIF بود، مستقیم بفرست
                 await update.message.reply_animation(

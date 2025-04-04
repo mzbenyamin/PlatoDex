@@ -45,8 +45,7 @@ async def webhook(request: Request):
     global application
     update = await request.json()
     update_obj = Update.de_json(update, application.bot)
-    # پردازش آپدیت رو به یه تسک جدا می‌فرستیم
-    asyncio.create_task(application.process_update(update_obj))
+    asyncio.create_task(application.process_update(update_obj))  # پردازش توی پس‌زمینه
     return {"status": "ok"}
 
 # مسیر ریشه برای تست

@@ -321,10 +321,22 @@ async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 # تابع جدید برای جستجوی آیتم در گروه با /i
 async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # چک کردن اینکه ربات هنوز توی چت هست یا نه
+    chat_id = update.effective_chat.id
+    try:
+        await context.bot.get_chat(chat_id)
+    except Exception as e:
+        logger.error(f"خطا در دسترسی به چت {chat_id}: {e}")
+        if "Forbidden" in str(e):
+            await update.message.reply_text("متأسفم، من از این گروه بیرون انداخته شدم! 😕 دوباره منو اد کن تا کمکت کنم.")
+        else:
+            await update.message.reply_text("یه مشکلی پیش اومد، نمی‌تونم چت رو پیدا کنم! 😅")
+        return
+    
     if not context.args:
         await update.message.reply_text(
             "لطفاً اسم آیتم رو بعد از /i بنویس! مثلاً: /i Macaron",
-            message_thread_id=update.message.message_thread_id  # اضافه کردن thread ID
+            message_thread_id=update.message.message_thread_id if update.message.is_topic_message else None
         )
         return
     
@@ -334,7 +346,7 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
     if not matching_items:
         await update.message.reply_text(
             f"متأسفم، آیتمی با اسم '{item_name}' پیدا نشد! 😕",
-            message_thread_id=update.message.message_thread_id  # اضافه کردن thread ID
+            message_thread_id=update.message.message_thread_id if update.message.is_topic_message else None
         )
         return
     
@@ -348,25 +360,41 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
         f"💸 قیمت : {price_info}"
     )
     
-    # گرفتن thread ID از پیام کاربر
-    thread_id = update.message.message_thread_id
+    # گرفتن thread ID فقط اگه پیام توی تاپیک باشه
+    thread_id = update.message.message_thread_id if update.message.is_topic_message else None
     
-    if item["images"]:
-        await update.message.reply_photo(
-            photo=item["images"][0],
-            caption=result_text,
-            message_thread_id=thread_id  # اضافه کردن thread ID
-        )
-    elif item["audios"]:
-        await update.message.reply_audio(
-            audio=item["audios"][0]["uri"],
-            caption=result_text,
-            message_thread_id=thread_id  # اضافه کردن thread ID
-        )
-    else:
+    try:
+        if item["images"]:
+            image_url = item["images"][0]
+            # چک کردن اینکه تصویر متحرک (GIF) هست یا نه
+            if image_url.lower().endswith('.gif'):
+                await update.message.reply_animation(
+                    animation=image_url,
+                    caption=result_text,
+                    message_thread_id=thread_id
+                )
+            else:
+                await update.message.reply_photo(
+                    photo=image_url,
+                    caption=result_text,
+                    message_thread_id=thread_id
+                )
+        elif item["audios"]:
+            await update.message.reply_audio(
+                audio=item["audios"][0]["uri"],
+                caption=result_text,
+                message_thread_id=thread_id
+            )
+        else:
+            await update.message.reply_text(
+                result_text,
+                message_thread_id=thread_id
+            )
+    except Exception as e:
+        logger.error(f"خطا در ارسال پیام: {e}")
         await update.message.reply_text(
-            result_text,
-            message_thread_id=thread_id  # اضافه کردن thread ID
+            "یه مشکلی پیش اومد، نمی‌تونم جواب بدم! 😅 بعداً دوباره امتحان کن.",
+            message_thread_id=thread_id
         )
 
 # مدیریت چت با AI

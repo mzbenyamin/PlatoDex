@@ -21,7 +21,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # توکن و آدرس‌ها
-TOKEN = '7764880184:AAEAp5oyNfB__Cotdmtxb9BHnWgwydRN0ME'
+TOKEN = '8011536409:AAGUT4m9BFxnQxppgBtbIrMXV-wF19txobs'
 IMAGE_API_URL = 'https://pollinations.ai/prompt/'
 TEXT_API_URL = 'https://text.pollinations.ai/'
 URL = "https://platopedia.com/items"
@@ -66,7 +66,6 @@ async def root():
 def clean_text(text):
     if not text:
         return ""
-    # کاراکترهای رزرو شده در MarkdownV2 رو فرمت می‌کنیم
     reserved_chars = r"([_*[\]()~`>#+\-=|{}.!])"
     return re.sub(reserved_chars, r"\\\1", text)
 
@@ -282,6 +281,32 @@ async def handle_inline_selection(update: Update, context: ContextTypes.DEFAULT_
         return
     
     thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
+    price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
+    price_info = f"{item['price']['value']} {price_type}"
+    results_text = (
+        f"*🔖 نام*: {item['name']}\n"
+        f"\n"
+        f"*🗃 دسته‌بندی*: {item['category']}\n"
+        f"*📃 توضیحات*: {item['description']}\n"
+        f"\n"
+        f"*💸 قیمت*: {price_info}\n"
+        f"*📣 @PlatoDex*"
+    )
+    
+    if item["images"]:
+        await update.message.reply_photo(
+            photo=item["images"][0],
+            caption=results_text,
+            message_thread_id=thread_id,
+            parse_mode="MarkdownV2"
+        )
+    else:
+        await update.message.reply_text(
+            results_text,
+            message_thread_id=thread_id,
+            parse_mode="MarkdownV2"
+        )
+    
     for i, audio_info in enumerate(item["audios"], 1):
         await send_audio(update, context, item, audio_info, i, None, thread_id)
 
@@ -364,10 +389,10 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup = InlineKeyboardMarkup(keyboard)
         if item["images"]:
             await update.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup, parse_mode="MarkdownV2")
+        else:
+            await update.message.reply_text(results_text, reply_markup=reply_markup, parse_mode="MarkdownV2")
         for i, audio_info in enumerate(item["audios"], 1):
             await send_audio(update, context, item, audio_info, i, reply_markup)
-        if not item["images"] and not item["audios"]:
-            await update.message.reply_text(results_text, reply_markup=reply_markup, parse_mode="MarkdownV2")
         return
     
     keyboard = []
@@ -422,13 +447,15 @@ async def send_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, item, a
                         chat_id=message.chat_id,
                         voice=voice_file,
                         caption=f"{audio_type}",
-                        message_thread_id=thread_id
+                        message_thread_id=thread_id,
+                        reply_markup=reply_markup
                     )
                 else:
                     await context.bot.send_voice(
                         chat_id=message.chat_id,
                         voice=voice_file,
-                        caption=f"{audio_type}"
+                        caption=f"{audio_type}",
+                        reply_markup=reply_markup
                     )
             os.remove(temp_file_path)
     except Exception as e:
@@ -464,11 +491,21 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if item["images"]:
-        await query.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup, parse_mode="MarkdownV2")
+        await query.message.reply_photo(
+            photo=item["images"][0],
+            caption=results_text,
+            reply_markup=reply_markup,
+            parse_mode="MarkdownV2"
+        )
+    else:
+        await query.message.reply_text(
+            results_text,
+            reply_markup=reply_markup,
+            parse_mode="MarkdownV2"
+        )
+    
     for i, audio_info in enumerate(item["audios"], 1):
         await send_audio(update, context, item, audio_info, i, reply_markup)
-    if not item["images"] and not item["audios"]:
-        await query.edit_message_text(results_text, reply_markup=reply_markup, parse_mode="MarkdownV2")
     
     return SEARCH_ITEM
 
@@ -589,12 +626,12 @@ async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not matching_items:
         await query.edit_message_text(f"هیچ آیتمی تو دسته‌بندی '{category}' پیدا نشد! 😕")
-        return SELECT_CATEGORY if "private" in query.data else None
+        return SELECT_CATEGORY
     
     context.user_data["matching_items"] = matching_items
     context.user_data["page"] = 0
     await send_paginated_items(update, context, is_group="group" in query.data)
-    return SEARCH_ITEM if "private" in query.data else None
+    return SEARCH_ITEM
 
 async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -639,6 +676,8 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         message_thread_id=thread_id,
                         parse_mode="MarkdownV2"
                     )
+                    for i, audio_info in enumerate(item["audios"], 1):
+                        await send_audio(update, context, item, audio_info, i, None, thread_id)
                 except Exception as e:
                     logger.error(f"خطا در تبدیل WebP: {e}")
                     await query.message.reply_text("مشکلی توی ارسال عکس پیش اومد! 😅", message_thread_id=thread_id)
@@ -650,6 +689,8 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message_thread_id=thread_id,
                 parse_mode="MarkdownV2"
             )
+            for i, audio_info in enumerate(item["audios"], 1):
+                await send_audio(update, context, item, audio_info, i, None, thread_id)
         else:
             await query.message.reply_photo(
                 photo=image_url,
@@ -657,11 +698,12 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 message_thread_id=thread_id,
                 parse_mode="MarkdownV2"
             )
+            for i, audio_info in enumerate(item["audios"], 1):
+                await send_audio(update, context, item, audio_info, i, None, thread_id)
     else:
-        await query.edit_message_text(results_text, parse_mode="MarkdownV2")
-    
-    for i, audio_info in enumerate(item["audios"], 1):
-        await send_audio(update, context, item, audio_info, i, None, thread_id)
+        await query.message.reply_text(results_text, parse_mode="MarkdownV2")
+        for i, audio_info in enumerate(item["audios"], 1):
+            await send_audio(update, context, item, audio_info, i, None, thread_id)
 
 async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -691,10 +733,12 @@ async def chat_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     AI_CHAT_USERS.add(user_id)
     context.user_data.clear()
     context.user_data["mode"] = "ai_chat"
+    context.user_data["chat_history"] = []  # تاریخچه چت برای هر کاربر
     keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
-        "🤖 چت با هوش مصنوعی فعال شد!\n\n",
+        "🤖 چت با هوش مصنوعی فعال شد!\n\n"
+        "هر چی می‌خوای بگو، من یادم می‌مونه چی گفتی! 😎",
         reply_markup=reply_markup
     )
     return ConversationHandler.END
@@ -705,12 +749,14 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ConversationHandler.END
     
     user_message = update.message.text
+    chat_history = context.user_data.get("chat_history", [])
+    chat_history.append({"role": "user", "content": user_message})
+    context.user_data["chat_history"] = chat_history
     
     payload = {
         "messages": [
-            {"role": "system", "content": SYSTEM_MESSAGE},
-            {"role": "user", "content": user_message}
-        ],
+            {"role": "system", "content": SYSTEM_MESSAGE}
+        ] + chat_history,
         "model": "mistral",
         "seed": 42,
         "jsonMode": False
@@ -723,6 +769,8 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = requests.post(TEXT_API_URL, json=payload, timeout=10)
         if response.status_code == 200:
             ai_response = response.text.strip()
+            chat_history.append({"role": "assistant", "content": ai_response})
+            context.user_data["chat_history"] = chat_history
             final_response = f"{ai_response}"
             await update.message.reply_text(final_response, reply_markup=reply_markup)
         else:

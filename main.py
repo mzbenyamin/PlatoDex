@@ -285,16 +285,21 @@ async def start_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SEARCH_ITEM
 
 async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if "processed_message_id" in context.user_data and context.user_data["processed_message_id"] == update.message.message_id:
+        return SEARCH_ITEM  # جلوگیری از پردازش دوباره
+    
     user_input = update.message.text.strip().lower()
     matching_items = [item for item in EXTRACTED_ITEMS if user_input in item["name"].lower() or user_input in item["category"].lower()]
     
     if not matching_items:
         keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
         await update.message.reply_text("هیچ آیتمی پیدا نشد! 😕", reply_markup=InlineKeyboardMarkup(keyboard))
+        context.user_data["processed_message_id"] = update.message.message_id
         return SEARCH_ITEM
     
     context.user_data["matching_items"] = matching_items
     context.user_data["page"] = 0
+    context.user_data["processed_message_id"] = update.message.message_id
     await send_paginated_items(update, context, is_group=False)
     return SEARCH_ITEM
 
@@ -321,7 +326,7 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
         keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         if is_group:
-            thread_id = update.message.message_thread_id if update.message.is_topic_message else None
+            thread_id = update.message.message_thread_id if update.message and hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
             if item["images"]:
                 await update.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup, message_thread_id=thread_id)
             for i, audio_info in enumerate(item["audios"], 1):
@@ -357,9 +362,11 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
     reply_markup = InlineKeyboardMarkup(keyboard)
     message_text = f"این آیتم‌ها رو پیدا کردم (صفحه {page + 1} از {total_pages})، کدوم رو می‌خوای؟ 👇"
     
-    if is_group:
-        thread_id = update.message.message_thread_id if update.message.is_topic_message else None
+    if is_group and update.message:
+        thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
         await update.message.reply_text(message_text, reply_markup=reply_markup, message_thread_id=thread_id)
+    elif update.callback_query:
+        await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
     else:
         await update.message.reply_text(message_text, reply_markup=reply_markup)
 
@@ -382,7 +389,7 @@ async def send_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, item, a
                         reply_markup=reply_markup,
                         message_thread_id=thread_id
                     )
-                else:
+                elif update.message:
                     await update.message.reply_voice(
                         voice=voice_file,
                         caption=f"🎙 وویس {index} آیتم: {item['name']} (نوع: {audio_type})",
@@ -391,9 +398,9 @@ async def send_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, item, a
             os.remove(temp_file_path)
     except Exception as e:
         logger.error(f"خطا در دانلود یا ارسال وویس {index}: {e}")
-        if thread_id:
+        if thread_id and update.message:
             await update.message.reply_text(f"مشکلی توی ارسال وویس {index} پیش اومد! 😅", reply_markup=reply_markup, message_thread_id=thread_id)
-        else:
+        elif update.message:
             await update.message.reply_text(f"مشکلی توی ارسال وویس {index} پیش اومد! 😅", reply_markup=reply_markup)
 
 async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -428,6 +435,9 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SEARCH_ITEM
 
 async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if "processed_message_id" in context.user_data and context.user_data["processed_message_id"] == update.message.message_id:
+        return  # جلوگیری از پردازش دوباره
+    
     chat_id = update.effective_chat.id
     try:
         await context.bot.get_chat(chat_id)
@@ -440,9 +450,10 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
         return
     
     if not context.args:
+        thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
         await update.message.reply_text(
             "لطفاً اسم آیتم رو بعد از /i بنویس! مثلاً: /i Macaron",
-            message_thread_id=update.message.message_thread_id if update.message.is_topic_message else None
+            message_thread_id=thread_id
         )
         return
     
@@ -450,7 +461,7 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
     matching_items = [item for item in EXTRACTED_ITEMS if item_name in item["name"].lower()]
     
     if not matching_items:
-        thread_id = update.message.message_thread_id if update.message.is_topic_message else None
+        thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
         await update.message.reply_text(
             f"متأسفم، آیتمی با اسم '{item_name}' پیدا نشد! 😕",
             message_thread_id=thread_id
@@ -459,6 +470,7 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
     
     context.user_data["matching_items"] = matching_items
     context.user_data["page"] = 0
+    context.user_data["processed_message_id"] = update.message.message_id
     await send_paginated_items(update, context, is_group=True)
     return
 
@@ -467,7 +479,7 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     item_id = query.data.replace("select_group_item_", "")
     item = next((i for i in EXTRACTED_ITEMS if i["id"] == item_id), None)
-    thread_id = query.message.message_thread_id if query.message.is_topic_message else None
+    thread_id = query.message.message_thread_id if hasattr(query.message, 'is_topic_message') and query.message.is_topic_message else None
     
     if not item:
         await query.edit_message_text("آیتم پیدا نشد! 😕")
@@ -532,12 +544,7 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif "prev_page" in query.data:
         context.user_data["page"] -= 1
     
-    if is_group:
-        await query.edit_message_text("در حال بارگذاری...", reply_markup=None)
-        await send_paginated_items(update, context, is_group=True)
-    else:
-        await query.edit_message_text("در حال بارگذاری...", reply_markup=None)
-        await send_paginated_items(update, context, is_group=False)
+    await send_paginated_items(update, context, is_group=is_group)
     return SEARCH_ITEM if not is_group else None
 
 async def chat_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):

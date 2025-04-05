@@ -842,7 +842,7 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     try:
         response = requests.post(TEXT_API_URL, json=payload, timeout=10)
         if response.status_code == 200:
-            ai_response = clean_text(response.text.strip())
+            ai_response = clean_text(response.text.strip())  # فرمت کردن پاسخ API
             user_history.append({"role": "assistant", "content": ai_response})
             context.user_data["group_chat_history"] = user_history
             
@@ -852,7 +852,7 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
                 if item["name"].lower() in user_message:
                     price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
                     price_info = clean_text(f"{item['price']['value']} {price_type}")
-                    item_info = (
+                    item_info = clean_text(
                         f"مشخصات آیتم پیدا شد! 🎉\n"
                         f"*🔖 نام*: {item['name']}\n"
                         f"*💸 قیمت*: {price_info}\n"
@@ -868,16 +868,18 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
                 parse_mode="MarkdownV2"
             )
         else:
+            error_message = clean_text("اوفف، یه مشکلی پیش اومد! 😅 بعداً امتحان کن 🚀")
             await update.message.reply_text(
-                clean_text("اوفف، یه مشکلی پیش اومد! 😅 بعداً امتحان کن 🚀"),
+                error_message,
                 reply_to_message_id=update.message.message_id,
                 message_thread_id=thread_id,
                 parse_mode="MarkdownV2"
             )
     except Exception as e:
         logger.error(f"خطا در اتصال به API چت گروه: {e}")
+        error_message = clean_text("اییی، یه خطا خوردم! 😭 بعداً دوباره بیا 🚀")
         await update.message.reply_text(
-            clean_text("اییی، یه خطا خوردم! 😭 بعداً دوباره بیا 🚀"),
+            error_message,
             reply_to_message_id=update.message.message_id,
             message_thread_id=thread_id,
             parse_mode="MarkdownV2"

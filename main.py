@@ -25,11 +25,12 @@ IMAGE_API_URL = 'https://pollinations.ai/prompt/'
 TEXT_API_URL = 'https://text.pollinations.ai/'
 URL = "https://platopedia.com/items"
 BASE_IMAGE_URL = "https://profile.platocdn.com/"
+WEBHOOK_URL = "https://platodex.onrender.com/webhook"
 EXTRACTED_ITEMS = []
 AI_CHAT_USERS = set()
 SEARCH_ITEM = 1
 SELECT_SIZE, GET_PROMPT = range(2)
-DEFAULT_CHAT_ID = 789912945
+DEFAULT_CHAT_ID = 789912945  # آیدی چت پیش‌فرض (باید آیدی خودت رو بذاری)
 
 # پیام سیستمی برای چت
 SYSTEM_MESSAGE = (
@@ -63,12 +64,12 @@ def clean_text(text):
         return ""
     return text.replace("*", "\\*").replace("_", "\\_").replace("`", "\\`").replace("[", "\\[")
 
-# تابع استخراج آیتم‌ها با retry
+# تابع استخراج آیتم‌ها
 async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
     global EXTRACTED_ITEMS
     EXTRACTED_ITEMS = []
     max_retries = 3
-    retry_delay = 5  # ثانیه
+    retry_delay = 5
 
     for attempt in range(max_retries):
         try:
@@ -78,8 +79,11 @@ async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
             script_tag = soup.find("script", string=re.compile(r"var items = {"))
             if not script_tag:
                 logger.error("داده‌های آیتم‌ها پیدا نشد!")
-                if context:
-                    await context.bot.send_message(chat_id=DEFAULT_CHAT_ID, text="مشکلی تو بارگذاری آیتم‌ها پیش اومد!")
+                if context and hasattr(context.bot, 'send_message'):
+                    try:
+                        await context.bot.send_message(chat_id=DEFAULT_CHAT_ID, text="مشکلی تو بارگذاری آیتم‌ها پیش اومد!")
+                    except Exception as e:
+                        logger.error(f"خطا در ارسال پیام: {e}")
                 return
             items_data = json.loads(re.search(r"var items = ({.*?});", script_tag.string, re.DOTALL).group(1))
             table = soup.find("table", id="tool_items_table_default")
@@ -111,8 +115,11 @@ async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
                         "audios": audios
                     })
             logger.info(f"تعداد آیتم‌ها: {len(EXTRACTED_ITEMS)}")
-            if context:
-                await context.bot.send_message(chat_id=DEFAULT_CHAT_ID, text=f"آیتم‌ها به‌روز شدند! تعداد: {len(EXTRACTED_ITEMS)}")
+            if context and hasattr(context.bot, 'send_message'):
+                try:
+                    await context.bot.send_message(chat_id=DEFAULT_CHAT_ID, text=f"آیتم‌ها به‌روز شدند! تعداد: {len(EXTRACTED_ITEMS)}")
+                except Exception as e:
+                    logger.error(f"خطا در ارسال پیام: {e}")
             return
         except (requests.RequestException, requests.Timeout) as e:
             logger.error(f"خطا در تلاش {attempt + 1}/{max_retries}: {e}")
@@ -121,8 +128,11 @@ async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
                 await asyncio.sleep(retry_delay)
             else:
                 logger.error("همه تلاش‌ها ناموفق بود!")
-                if context:
-                    await context.bot.send_message(chat_id=DEFAULT_CHAT_ID, text="خطا در به‌روزرسانی آیتم‌ها! بعداً امتحان کنید.")
+                if context and hasattr(context.bot, 'send_message'):
+                    try:
+                        await context.bot.send_message(chat_id=DEFAULT_CHAT_ID, text="خطا در به‌روزرسانی آیتم‌ها! بعداً امتحان کنید.")
+                    except Exception as e:
+                        logger.error(f"خطا در ارسال پیام: {e}")
                 return
 
 # تابع زمان‌بندی
@@ -238,7 +248,7 @@ async def retry_generate_image(update: Update, context: ContextTypes.DEFAULT_TYP
         [InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.message.reply_text(
+    await query.edit_message_text(
         "🖼️ Generate Image Mode Activated!\n\n"
         "لطفاً سایز تصویر مورد نظر خود را انتخاب کنید:",
         reply_markup=reply_markup
@@ -281,12 +291,9 @@ async def start_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
-        "🔍 Item Search Mode Activated!\n\n"
-        "لطفاً نام آیتم مورد نظر خود را وارد کنید تا اطلاعات آن را به شما نمایش دهم.\n"
-        "می‌توانید بخشی از نام یا دسته‌بندی آیتم را بنویسید.",
+        "🔍 لطفاً اسم آیتم رو بفرست!",
         reply_markup=reply_markup
     )
-    context.user_data["mode"] = "search_item"
     return SEARCH_ITEM
 
 # پردازش جستجوی آیتم
@@ -294,73 +301,111 @@ async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE
     user_input = update.message.text.strip().lower()
     matching_items = [item for item in EXTRACTED_ITEMS if user_input in item["name"].lower() or user_input in item["category"].lower()]
     keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     
     if not matching_items:
-        await update.message.reply_text("متأسفم، هیچ آیتمی پیدا نشد!", reply_markup=reply_markup)
-    elif len(matching_items) > 10:
-        results_text = f"🔍 نتایج جستجو ({len(matching_items)} مورد - نمایش 10 مورد اول):\n\n"
-        for i, item in enumerate(matching_items[:10], 1):
+        await update.message.reply_text("هیچ آیتمی پیدا نشد! 😕", reply_markup=InlineKeyboardMarkup(keyboard))
+        return SEARCH_ITEM
+    
+    if len(matching_items) > 1:
+        keyboard = []
+        for i, item in enumerate(matching_items, 1):
             price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
             price_info = f"{item['price']['value']} {price_type}"
-            results_text += f"{i}. {item['name']} - {price_info}\n"
-        await update.message.reply_text(results_text, reply_markup=reply_markup)
-    else:
-        for item in matching_items:
-            price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-            price_info = f"{item['price']['value']} {price_type}"
-            results_text = (
-                f"🏷 نام : {item['name']}\n"
-                f"🗃 دسته‌بندی : {item['category']}\n"
-                f"📃 توضیحات : {item['description']}\n"
-                f"💸 قیمت : {price_info}"
-            )
-            
-            # ارسال تصویر اگه وجود داشته باشه
-            if item["images"]:
-                await update.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup)
-            
-            # ارسال وویس اگه صدا داشته باشه
-            if item["audios"]:
-                audio_info = item["audios"][0]  # اولین فایل صوتی
-                audio_url = audio_info["uri"]
-                base_url = "https://game-assets-prod.platocdn.com/"
-                
-                # ساخت URL کامل
-                full_url = base_url + audio_url if not audio_url.startswith("http") else audio_url
-                
-                # دانلود فایل صوتی
-                try:
-                    response = requests.get(full_url, timeout=10)
-                    if response.status_code == 200:
-                        # استفاده از tempfile برای ذخیره موقت
-                        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as temp_file:
-                            temp_file.write(response.content)
-                            temp_file_path = temp_file.name
-                        
-                        # ارسال به‌صورت وویس
-                        with open(temp_file_path, "rb") as voice_file:
-                            await update.message.reply_voice(
-                                voice=voice_file,
-                                caption=f"🎙 وویس آیتم: {item['name']}",
-                                reply_markup=reply_markup
-                            )
-                        # حذف فایل موقت
-                        os.remove(temp_file_path)
-                    else:
-                        await update.message.reply_text(
-                            f"خطا در دانلود وویس: {response.status_code}",
-                            reply_markup=reply_markup
-                        )
-                except Exception as e:
-                    logger.error(f"خطا در دانلود یا ارسال وویس: {e}")
-                    await update.message.reply_text(
-                        "مشکلی توی دانلود وویس آیتم پیش اومد! 😅",
+            button_text = f"{i}. {item['name']} - {price_info}"
+            callback_data = f"select_item_{item['id']}"
+            keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+        keyboard.append([InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text("این آیتم‌ها رو پیدا کردم، کدوم رو می‌خوای؟ 👇", reply_markup=reply_markup)
+        return SEARCH_ITEM
+    
+    item = matching_items[0]
+    price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
+    price_info = f"{item['price']['value']} {price_type}"
+    results_text = (
+        f"🏷 نام : {item['name']}\n"
+        f"🗃 دسته‌بندی : {item['category']}\n"
+        f"📃 توضیحات : {item['description']}\n"
+        f"💸 قیمت : {price_info}"
+    )
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    if item["images"]:
+        await update.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup)
+    if item["audios"]:
+        audio_info = item["audios"][0]
+        audio_url = audio_info["uri"]
+        base_url = "https://game-assets-prod.platocdn.com/"
+        full_url = base_url + audio_url if not audio_url.startswith("http") else audio_url
+        try:
+            response = requests.get(full_url, timeout=10)
+            if response.status_code == 200:
+                with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as temp_file:
+                    temp_file.write(response.content)
+                    temp_file_path = temp_file.name
+                with open(temp_file_path, "rb") as voice_file:
+                    await update.message.reply_voice(
+                        voice=voice_file,
+                        caption=f"🎙 وویس آیتم: {item['name']}",
                         reply_markup=reply_markup
                     )
-            # اگه نه عکس داشت نه صدا
-            elif not item["images"]:
-                await update.message.reply_text(results_text, reply_markup=reply_markup)
+                os.remove(temp_file_path)
+        except Exception as e:
+            logger.error(f"خطا در دانلود یا ارسال وویس: {e}")
+            await update.message.reply_text("مشکلی توی ارسال وویس پیش اومد! 😅", reply_markup=reply_markup)
+    elif not item["images"]:
+        await update.message.reply_text(results_text, reply_markup=reply_markup)
+    
+    return SEARCH_ITEM
+
+# تابع انتخاب آیتم
+async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    item_id = query.data.replace("select_item_", "")
+    item = next((i for i in EXTRACTED_ITEMS if i["id"] == item_id), None)
+    
+    if not item:
+        await query.edit_message_text("آیتم پیدا نشد! 😕")
+        return SEARCH_ITEM
+    
+    price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
+    price_info = f"{item['price']['value']} {price_type}"
+    results_text = (
+        f"🏷 نام : {item['name']}\n"
+        f"🗃 دسته‌بندی : {item['category']}\n"
+        f"📃 توضیحات : {item['description']}\n"
+        f"💸 قیمت : {price_info}"
+    )
+    
+    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if item["images"]:
+        await query.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup)
+    if item["audios"]:
+        audio_info = item["audios"][0]
+        audio_url = audio_info["uri"]
+        base_url = "https://game-assets-prod.platocdn.com/"
+        full_url = base_url + audio_url if not audio_url.startswith("http") else audio_url
+        try:
+            response = requests.get(full_url, timeout=10)
+            if response.status_code == 200:
+                with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as temp_file:
+                    temp_file.write(response.content)
+                    temp_file_path = temp_file.name
+                with open(temp_file_path, "rb") as voice_file:
+                    await query.message.reply_voice(
+                        voice=voice_file,
+                        caption=f"🎙 وویس آیتم: {item['name']}",
+                        reply_markup=reply_markup
+                    )
+                os.remove(temp_file_path)
+        except Exception as e:
+            logger.error(f"خطا در دانلود یا ارسال وویس: {e}")
+            await query.message.reply_text("مشکلی توی ارسال وویس پیش اومد! 😅", reply_markup=reply_markup)
+    elif not item["images"]:
+        await query.edit_message_text(results_text, reply_markup=reply_markup)
     
     return SEARCH_ITEM
 
@@ -437,11 +482,26 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
                     message_thread_id=thread_id
                 )
         elif item["audios"]:
-            await update.message.reply_audio(
-                audio=item["audios"][0]["uri"],
-                caption=result_text,
-                message_thread_id=thread_id
-            )
+            audio_info = item["audios"][0]
+            audio_url = audio_info["uri"]
+            base_url = "https://game-assets-prod.platocdn.com/"
+            full_url = base_url + audio_url if not audio_url.startswith("http") else audio_url
+            try:
+                response = requests.get(full_url, timeout=10)
+                if response.status_code == 200:
+                    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as temp_file:
+                        temp_file.write(response.content)
+                        temp_file_path = temp_file.name
+                    with open(temp_file_path, "rb") as voice_file:
+                        await update.message.reply_voice(
+                            voice=voice_file,
+                            caption=result_text,
+                            message_thread_id=thread_id
+                        )
+                    os.remove(temp_file_path)
+            except Exception as e:
+                logger.error(f"خطا در دانلود یا ارسال وویس: {e}")
+                await update.message.reply_text("مشکلی توی ارسال وویس پیش اومد! 😅", message_thread_id=thread_id)
         else:
             await update.message.reply_text(
                 result_text,
@@ -530,7 +590,7 @@ async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Chat with AI 🤖", callback_data="chat_with_ai")],
         [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")]
     ]
-    await update.message.reply_text(
+    await query.edit_message_text(
         text=welcome_message,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -550,11 +610,11 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"خطا رخ داد: {context.error}")
 
-# تابع اصلی با retry برای تلگرام
+# تابع اصلی با webhook
 async def main():
     global application
     max_retries = 3
-    retry_delay = 5  # ثانیه
+    retry_delay = 5
     
     for attempt in range(max_retries):
         try:
@@ -564,8 +624,8 @@ async def main():
                 logger.error("JobQueue فعال نیست!")
                 raise RuntimeError("JobQueue فعال نیست!")
             
-            webhook_url = "https://platodex.onrender.com/webhook"
-            await application.bot.set_webhook(url=webhook_url)
+            await application.bot.set_webhook(url=WEBHOOK_URL)
+            logger.info(f"Webhook روی {WEBHOOK_URL} تنظیم شد.")
             
             schedule_scraping(application)
             await extract_items()
@@ -575,6 +635,7 @@ async def main():
                 states={
                     SEARCH_ITEM: [
                         MessageHandler(filters.TEXT & ~filters.COMMAND, process_item_search),
+                        CallbackQueryHandler(select_item, pattern="^select_item_"),
                         CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
                     ]
                 },

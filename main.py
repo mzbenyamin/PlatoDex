@@ -761,7 +761,7 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "messages": [
             {"role": "system", "content": SYSTEM_MESSAGE}
         ] + chat_history,
-        "model": "openai-large",
+        "model": "searchgpt",
         "seed": 42,
         "jsonMode": False
     }
@@ -834,7 +834,7 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
         "messages": [
             {"role": "system", "content": SYSTEM_MESSAGE}
         ] + user_history,
-        "model": "openai-large",
+        "model": "searchgpt",
         "seed": 42,
         "jsonMode": False
     }

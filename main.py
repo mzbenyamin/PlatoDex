@@ -254,17 +254,20 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
             price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
             price_info = f"{item['price']['value']} {price_type}"
             result_content = (
-                f"🏷 نام : {item['name']}\n\n"
-                f"🗃 دسته‌بندی : {item['category']}\n"
-                f"📃 توضیحات : {item['description']}\n\n"
-                f"💸 قیمت : {price_info}\n\n@PlatoDex"
+                f"**🔖 نام**: {item['name']}\n"
+                f"\n"
+                f"**🗃 دسته‌بندی**: {item['category']}\n"
+                f"**📃 توضیحات**: {item['description']}\n"
+                f"\n"
+                f"**💸 قیمت**: {price_info}\n"
+                f"**📣 @PlatoDex**"
             )
             results.append(
                 InlineQueryResultArticle(
                     id=item["id"],
                     title=item["name"],
                     description=f"{item['category']} - {price_info}",
-                    input_message_content=InputTextMessageContent(result_content),
+                    input_message_content=InputTextMessageContent(result_content, parse_mode="Markdown"),
                     thumb_url=item["images"][0] if item["images"] else None
                 )
             )
@@ -328,19 +331,22 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
         price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
         price_info = f"{item['price']['value']} {price_type}"
         results_text = (
-            f"🏷 نام : {item['name']}\n"
-            f"🗃 دسته‌بندی : {item['category']}\n"
-            f"📃 توضیحات : {item['description']}\n"
-            f"💸 قیمت : {price_info}\n\n@PlatoDex"
+            f"**🔖 نام**: {item['name']}\n"
+            f"\n"
+            f"**🗃 دسته‌بندی**: {item['category']}\n"
+            f"**📃 توضیحات**: {item['description']}\n"
+            f"\n"
+            f"**💸 قیمت**: {price_info}\n"
+            f"**📣 @PlatoDex**"
         )
         keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         if item["images"]:
-            await update.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup)
+            await update.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup, parse_mode="Markdown")
         for i, audio_info in enumerate(item["audios"], 1):
             await send_audio(update, context, item, audio_info, i, reply_markup)
         if not item["images"] and not item["audios"]:
-            await update.message.reply_text(results_text, reply_markup=reply_markup)
+            await update.message.reply_text(results_text, reply_markup=reply_markup, parse_mode="Markdown")
         return
     
     keyboard = []
@@ -424,21 +430,24 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
     price_info = f"{item['price']['value']} {price_type}"
     results_text = (
-        f"🏷 نام : {item['name']}\n"
-        f"🗃 دسته‌بندی : {item['category']}\n"
-        f"📃 توضیحات : {item['description']}\n"
-        f"💸 قیمت : {price_info}\n\n@PlatoDex"
+        f"**🔖 نام**: {item['name']}\n"
+        f"\n"
+        f"**🗃 دسته‌بندی**: {item['category']}\n"
+        f"**📃 توضیحات**: {item['description']}\n"
+        f"\n"
+        f"**💸 قیمت**: {price_info}\n"
+        f"**📣 @PlatoDex**"
     )
     
     keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if item["images"]:
-        await query.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup)
+        await query.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup, parse_mode="Markdown")
     for i, audio_info in enumerate(item["audios"], 1):
         await send_audio(update, context, item, audio_info, i, reply_markup)
     if not item["images"] and not item["audios"]:
-        await query.edit_message_text(results_text, reply_markup=reply_markup)
+        await query.edit_message_text(results_text, reply_markup=reply_markup, parse_mode="Markdown")
     
     return SEARCH_ITEM
 
@@ -464,7 +473,6 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
     thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
     
     if not context.args:
-        # نمایش دسته‌بندی‌ها وقتی /i بدون آرگومان وارد بشه
         categories = sorted(set(item["category"] for item in EXTRACTED_ITEMS))
         context.user_data["categories"] = categories
         context.user_data["page"] = 0
@@ -481,14 +489,17 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
     
-    item = matching_items[0]  # فقط اولین آیتم رو نشون میدیم
+    item = matching_items[0]
     price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
     price_info = f"{item['price']['value']} {price_type}"
     results_text = (
-        f"🏷 نام : {item['name']}\n"
-        f"🗃 دسته‌بندی : {item['category']}\n"
-        f"📃 توضیحات : {item['description']}\n"
-        f"💸 قیمت : {price_info}\n\n@PlatoDex"
+        f"**🔖 نام**: {item['name']}\n"
+        f"\n"
+        f"**🗃 دسته‌بندی**: {item['category']}\n"
+        f"**📃 توضیحات**: {item['description']}\n"
+        f"\n"
+        f"**💸 قیمت**: {price_info}\n"
+        f"**📣 @PlatoDex**"
     )
     
     if item["images"]:
@@ -496,13 +507,15 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
             photo=item["images"][0],
             caption=results_text,
             reply_to_message_id=update.message.message_id,
-            message_thread_id=thread_id
+            message_thread_id=thread_id,
+            parse_mode="Markdown"
         )
     else:
         await update.message.reply_text(
             results_text,
             reply_to_message_id=update.message.message_id,
-            message_thread_id=thread_id
+            message_thread_id=thread_id,
+            parse_mode="Markdown"
         )
     
     for i, audio_info in enumerate(item["audios"], 1):
@@ -565,43 +578,55 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
     price_info = f"{item['price']['value']} {price_type}"
     results_text = (
-        f"🏷 نام : {item['name']}\n"
-        f"🗃 دسته‌بندی : {item['category']}\n"
-        f"📃 توضیحات : {item['description']}\n"
-        f"💸 قیمت : {price_info}\n\n@PlatoDex"
+        f"**🔖 نام**: {item['name']}\n"
+        f"\n"
+        f"**🗃 دسته‌بندی**: {item['category']}\n"
+        f"**📃 توضیحات**: {item['description']}\n"
+        f"\n"
+        f"**💸 قیمت**: {price_info}\n"
+        f"**📣 @PlatoDex**"
     )
     
     if item["images"]:
         image_url = item["images"][0]
         if image_url.lower().endswith('.webp'):
-            response = requests.get(image_url, timeout=10)
-            response.raise_for_status()
-            img = Image.open(io.BytesIO(response.content))
-            gif_buffer = io.BytesIO()
-            if img.mode != 'RGBA':
-                img = img.convert('RGBA')
-            img.save(gif_buffer, format='GIF', save_all=True, optimize=True)
-            gif_buffer.seek(0)
-            input_file = InputFile(gif_buffer, filename="animation.gif")
-            await query.message.reply_animation(
-                animation=input_file,
-                caption=results_text,
-                message_thread_id=thread_id
-            )
+            async def process_webp():
+                try:
+                    response = requests.get(image_url, timeout=10)
+                    response.raise_for_status()
+                    img = Image.open(io.BytesIO(response.content))
+                    gif_buffer = io.BytesIO()
+                    if img.mode != 'RGBA':
+                        img = img.convert('RGBA')
+                    img.save(gif_buffer, format='GIF', save_all=True, optimize=True)
+                    gif_buffer.seek(0)
+                    input_file = InputFile(gif_buffer, filename="animation.gif")
+                    await query.message.reply_animation(
+                        animation=input_file,
+                        caption=results_text,
+                        message_thread_id=thread_id,
+                        parse_mode="Markdown"
+                    )
+                except Exception as e:
+                    logger.error(f"خطا در تبدیل WebP: {e}")
+                    await query.message.reply_text("مشکلی توی ارسال عکس پیش اومد! 😅", message_thread_id=thread_id)
+            asyncio.create_task(process_webp())
         elif image_url.lower().endswith('.gif'):
             await query.message.reply_animation(
                 animation=image_url,
                 caption=results_text,
-                message_thread_id=thread_id
+                message_thread_id=thread_id,
+                parse_mode="Markdown"
             )
         else:
             await query.message.reply_photo(
                 photo=image_url,
                 caption=results_text,
-                message_thread_id=thread_id
+                message_thread_id=thread_id,
+                parse_mode="Markdown"
             )
     else:
-        await query.edit_message_text(results_text)
+        await query.edit_message_text(results_text, parse_mode="Markdown")
     
     for i, audio_info in enumerate(item["audios"], 1):
         await send_audio(update, context, item, audio_info, i, None, thread_id)
@@ -714,6 +739,9 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"خطا رخ داد: {context.error}")
+    if str(context.error) == "Query is too old and response timeout expired or query id is invalid":
+        if update and update.callback_query:
+            await update.callback_query.message.reply_text("اوپس، یه کم دیر شد! دوباره امتحان کن 😅")
 
 async def main():
     global application
@@ -722,7 +750,7 @@ async def main():
     
     for attempt in range(max_retries):
         try:
-            application = Application.builder().token(TOKEN).read_timeout(30).write_timeout(30).connect_timeout(30).build()
+            application = Application.builder().token(TOKEN).read_timeout(60).write_timeout(60).connect_timeout(60).build()
             
             if application.job_queue is None:
                 logger.error("JobQueue فعال نیست!")

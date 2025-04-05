@@ -29,8 +29,8 @@ BASE_IMAGE_URL = "https://profile.platocdn.com/"
 WEBHOOK_URL = "https://platodex.onrender.com/webhook"
 EXTRACTED_ITEMS = []
 AI_CHAT_USERS = set()
-SEARCH_ITEM = 1
-SELECT_SIZE, GET_PROMPT = range(2)
+SEARCH_ITEM, SELECT_CATEGORY = range(2)
+SELECT_SIZE, GET_PROMPT = range(2, 4)
 DEFAULT_CHAT_ID = 789912945
 PROCESSED_MESSAGES = set()
 PROCESSING_LOCK = Lock()
@@ -66,7 +66,9 @@ async def root():
 def clean_text(text):
     if not text:
         return ""
-    return text.replace("*", "\\*").replace("_", "\\_").replace("`", "\\`").replace("[", "\\[")
+    # کاراکترهای رزرو شده در MarkdownV2 رو فرمت می‌کنیم
+    reserved_chars = r"([_*[\]()~`>#+\-=|{}.!])"
+    return re.sub(reserved_chars, r"\\\1", text)
 
 async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
     global EXTRACTED_ITEMS
@@ -287,6 +289,25 @@ async def start_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     context.user_data.clear()
+    categories = sorted(set(item["category"] for item in EXTRACTED_ITEMS))
+    context.user_data["categories"] = categories
+    context.user_data["page"] = 0
+    keyboard = [
+        [InlineKeyboardButton("🔍 جست‌وجو با اسم", callback_data="search_by_name")],
+        [InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(
+        "🔍 می‌خوای آیتم‌ها رو چطوری پیدا کنی؟\n"
+        "یا از دسته‌بندی‌ها انتخاب کن یا اسم آیتم رو بفرست!",
+        reply_markup=reply_markup
+    )
+    await send_paginated_categories(update, context, is_group=False)
+    return SELECT_CATEGORY
+
+async def search_by_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
     keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
@@ -318,7 +339,7 @@ async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYPE, is_group=False):
     matching_items = context.user_data["matching_items"]
-    page = context.user_data.get("page", 0)  # مقدار پیش‌فرض 0
+    page = context.user_data.get("page", 0)
     items_per_page = 10
     total_pages = (len(matching_items) + items_per_page - 1) // items_per_page
     
@@ -476,7 +497,7 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
         categories = sorted(set(item["category"] for item in EXTRACTED_ITEMS))
         context.user_data["categories"] = categories
         context.user_data["page"] = 0
-        await send_paginated_categories(update, context)
+        await send_paginated_categories(update, context, is_group=True)
         return
     
     item_name = " ".join(context.args).strip().lower()
@@ -524,9 +545,9 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
         context.user_data["page"] = 0
         await send_paginated_items(update, context, is_group=True)
 
-async def send_paginated_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def send_paginated_categories(update: Update, context: ContextTypes.DEFAULT_TYPE, is_group=False):
     categories = context.user_data.get("categories", sorted(set(item["category"] for item in EXTRACTED_ITEMS)))
-    page = context.user_data.get("page", 0)  # مقدار پیش‌فرض 0
+    page = context.user_data.get("page", 0)
     items_per_page = 10
     total_pages = (len(categories) + items_per_page - 1) // items_per_page
     
@@ -541,17 +562,24 @@ async def send_paginated_categories(update: Update, context: ContextTypes.DEFAUL
     
     nav_buttons = []
     if page > 0:
-        nav_buttons.append(InlineKeyboardButton("⬅️ قبلی", callback_data="prev_page_group_categories"))
+        nav_buttons.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"prev_page_{'group' if is_group else 'private'}_categories"))
     if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("بعدی ➡️", callback_data="next_page_group_categories"))
+        nav_buttons.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"next_page_{'group' if is_group else 'private'}_categories"))
     if nav_buttons:
         keyboard.append(nav_buttons)
+    if not is_group:
+        keyboard.append([InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     message_text = f"دسته‌بندی‌ها (صفحه {page + 1} از {total_pages})، کدوم رو می‌خوای؟ 👇"
     
-    thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
-    await update.message.reply_text(message_text, reply_markup=reply_markup, message_thread_id=thread_id)
+    if is_group and update.message:
+        thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
+        await update.message.reply_text(message_text, reply_markup=reply_markup, message_thread_id=thread_id)
+    elif update.callback_query:
+        await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
+    else:
+        await update.message.reply_text(message_text, reply_markup=reply_markup)
 
 async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -561,11 +589,12 @@ async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not matching_items:
         await query.edit_message_text(f"هیچ آیتمی تو دسته‌بندی '{category}' پیدا نشد! 😕")
-        return
+        return SELECT_CATEGORY if "private" in query.data else None
     
     context.user_data["matching_items"] = matching_items
     context.user_data["page"] = 0
-    await send_paginated_items(update, context, is_group=True)
+    await send_paginated_items(update, context, is_group="group" in query.data)
+    return SEARCH_ITEM if "private" in query.data else None
 
 async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -637,22 +666,23 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if "group_categories" in query.data:
-        page = context.user_data.get("page", 0)
+    is_group = "group" in query.data
+    page = context.user_data.get("page", 0)
+    
+    if "categories" in query.data:
         if "next_page" in query.data:
             context.user_data["page"] = page + 1
         elif "prev_page" in query.data:
             context.user_data["page"] = max(0, page - 1)
-        await send_paginated_categories(update, context)
+        await send_paginated_categories(update, context, is_group=is_group)
+        return SELECT_CATEGORY if not is_group else None
     else:
-        is_group = "group" in query.data
-        page = context.user_data.get("page", 0)
         if "next_page" in query.data:
             context.user_data["page"] = page + 1
         elif "prev_page" in query.data:
             context.user_data["page"] = max(0, page - 1)
         await send_paginated_items(update, context, is_group=is_group)
-    return SEARCH_ITEM if not is_group else None
+        return SEARCH_ITEM if not is_group else None
 
 async def chat_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -770,11 +800,15 @@ async def main():
             search_conv_handler = ConversationHandler(
                 entry_points=[CallbackQueryHandler(start_item_search, pattern="^search_items$")],
                 states={
+                    SELECT_CATEGORY: [
+                        CallbackQueryHandler(search_by_name, pattern="^search_by_name$"),
+                        CallbackQueryHandler(select_category, pattern="^select_category_"),
+                        CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_private_categories$")
+                    ],
                     SEARCH_ITEM: [
                         MessageHandler(filters.TEXT & ~filters.COMMAND, process_item_search),
                         CallbackQueryHandler(select_item, pattern="^select_item_"),
-                        CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_private$"),
-                        CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
+                        CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_private$")
                     ]
                 },
                 fallbacks=[

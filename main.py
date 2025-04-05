@@ -37,7 +37,8 @@ PROCESSING_LOCK = Lock()
 
 SYSTEM_MESSAGE = (
     "شما دستیار هوشمند PlatoDex هستید و درمورد پلاتو به کاربران کمک میکنید و به صورت خودمونی جذاب و با ایموجی "
-    "حرف میزنی به صورت نسل z و کمی با طنز حرف بزن و شوخی کنه"
+    "حرف میزنی به صورت نسل z و کمی با طنز حرف بزن و شوخی کنه. به مشخصات آیتم‌های پلاتو دسترسی داری و می‌تونی "
+    "به سوالات کاربر در مورد آیتم‌ها جواب بدی و راهنمایی کنی چطور با دستور /i مشخصات کامل رو بگیرن."
 )
 
 application = None
@@ -733,7 +734,7 @@ async def chat_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     AI_CHAT_USERS.add(user_id)
     context.user_data.clear()
     context.user_data["mode"] = "ai_chat"
-    context.user_data["chat_history"] = []  # تاریخچه چت برای هر کاربر
+    context.user_data["chat_history"] = []
     keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
@@ -786,6 +787,94 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     
     return ConversationHandler.END
+
+async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message_id = update.message.message_id
+    with PROCESSING_LOCK:
+        if message_id in PROCESSED_MESSAGES:
+            logger.warning(f"پیام تکراری در گروه با message_id: {message_id} - نادیده گرفته شد")
+            return
+        PROCESSED_MESSAGES.add(message_id)
+    
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
+    user_message = update.message.text.lower()
+    replied_message = update.message.reply_to_message
+
+    # ثبت تاریخچه گروه
+    group_history = context.bot_data.get("group_history", {}).get(chat_id, [])
+    group_history.append({"user_id": user_id, "content": user_message, "message_id": message_id})
+    context.bot_data["group_history"] = {chat_id: group_history}
+
+    # ثبت تاریخچه کاربر
+    user_history = context.user_data.get("group_chat_history", [])
+    
+    # شرط‌های پاسخگویی
+    should_reply = (
+        "ربات" in user_message or "پلاتو" in user_message or
+        (replied_message and replied_message.from_user.id == context.bot.id)
+    )
+    
+    if not should_reply:
+        return
+    
+    # اگه ریپلای به پیام رباته، متن پیام ریپلای‌شده رو هم اضافه کنیم
+    if replied_message and replied_message.from_user.id == context.bot.id:
+        user_history.append({"role": "assistant", "content": replied_message.text})
+    
+    user_history.append({"role": "user", "content": user_message})
+    context.user_data["group_chat_history"] = user_history
+    
+    payload = {
+        "messages": [
+            {"role": "system", "content": SYSTEM_MESSAGE}
+        ] + user_history,
+        "model": "mistral",
+        "seed": 42,
+        "jsonMode": False
+    }
+    
+    try:
+        response = requests.post(TEXT_API_URL, json=payload, timeout=10)
+        if response.status_code == 200:
+            ai_response = response.text.strip()
+            user_history.append({"role": "assistant", "content": ai_response})
+            context.user_data["group_chat_history"] = user_history
+            
+            # چک کردن سوال در مورد آیتم‌ها
+            for item in EXTRACTED_ITEMS:
+                if item["name"].lower() in user_message:
+                    price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
+                    price_info = f"{item['price']['value']} {price_type}"
+                    item_info = (
+                        f"مشخصات آیتم پیدا شد! 🎉\n"
+                        f"*🔖 نام*: {item['name']}\n"
+                        f"*💸 قیمت*: {price_info}\n"
+                        f"اگه می‌خوای مشخصات کامل‌تر با صدا رو ببینی، کافیه بگی: `/i {item['name']}` 😎"
+                    )
+                    ai_response += f"\n\n{item_info}"
+                    break
+            
+            await update.message.reply_text(
+                ai_response,
+                reply_to_message_id=update.message.message_id,
+                message_thread_id=thread_id,
+                parse_mode="MarkdownV2"
+            )
+        else:
+            await update.message.reply_text(
+                "اوفف، یه مشکلی پیش اومد! 😅 بعداً امتحان کن 🚀",
+                reply_to_message_id=update.message.message_id,
+                message_thread_id=thread_id
+            )
+    except Exception as e:
+        logger.error(f"خطا در اتصال به API چت گروه: {e}")
+        await update.message.reply_text(
+            "اییی، یه خطا خوردم! 😭 بعداً دوباره بیا 🚀",
+            reply_to_message_id=update.message.message_id,
+            message_thread_id=thread_id
+        )
 
 async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -898,6 +987,7 @@ async def main():
             application.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
             application.add_handler(InlineQueryHandler(inline_query))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
             application.add_handler(MessageHandler(filters.Regex(r"🔖 نام"), handle_inline_selection))
             application.add_error_handler(error_handler)
             

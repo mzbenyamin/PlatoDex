@@ -14,6 +14,7 @@ from PIL import Image
 import io
 import tempfile
 import os
+from threading import Lock
 
 # تنظیم لاگ
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -32,6 +33,7 @@ SEARCH_ITEM = 1
 SELECT_SIZE, GET_PROMPT = range(2)
 DEFAULT_CHAT_ID = 789912945  # آیدی چت پیش‌فرض (باید آیدی خودت رو بذاری)
 PROCESSED_MESSAGES = set()  # برای جلوگیری از پردازش تکراری
+PROCESSING_LOCK = Lock()  # قفل برای جلوگیری از پردازش همزمان
 
 # پیام سیستمی برای چت
 SYSTEM_MESSAGE = (
@@ -52,10 +54,11 @@ async def webhook(request: Request):
     update_obj = Update.de_json(update, application.bot)
     update_id = update_obj.update_id
     logger.info(f"دریافت درخواست با update_id: {update_id}")
-    if update_id in PROCESSED_MESSAGES:
-        logger.warning(f"درخواست تکراری با update_id: {update_id} - نادیده گرفته شد")
-        return {"status": "ok"}
-    PROCESSED_MESSAGES.add(update_id)
+    with PROCESSING_LOCK:
+        if update_id in PROCESSED_MESSAGES:
+            logger.warning(f"درخواست تکراری با update_id: {update_id} - نادیده گرفته شد")
+            return {"status": "ok"}
+        PROCESSED_MESSAGES.add(update_id)
     asyncio.create_task(application.process_update(update_obj))
     return {"status": "ok"}
 
@@ -279,6 +282,19 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     await update.inline_query.answer(results[:50])
 
+async def handle_inline_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message_text = update.message.text
+    item = next((i for i in EXTRACTED_ITEMS if i["name"] in message_text), None)
+    if not item:
+        return
+    
+    thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
+    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    for i, audio_info in enumerate(item["audios"], 1):
+        await send_audio(update, context, item, audio_info, i, reply_markup, thread_id)
+
 async def start_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -293,9 +309,11 @@ async def start_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_id = update.message.message_id
-    if message_id in PROCESSED_MESSAGES:
-        logger.warning(f"پیام تکراری در چت خصوصی با message_id: {message_id} - نادیده گرفته شد")
-        return SEARCH_ITEM
+    with PROCESSING_LOCK:
+        if message_id in PROCESSED_MESSAGES:
+            logger.warning(f"پیام تکراری در چت خصوصی با message_id: {message_id} - نادیده گرفته شد")
+            return SEARCH_ITEM
+        PROCESSED_MESSAGES.add(message_id)
     
     user_input = update.message.text.strip().lower()
     matching_items = [item for item in EXTRACTED_ITEMS if user_input in item["name"].lower() or user_input in item["category"].lower()]
@@ -303,12 +321,10 @@ async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not matching_items:
         keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
         await update.message.reply_text("هیچ آیتمی پیدا نشد! 😕", reply_markup=InlineKeyboardMarkup(keyboard))
-        PROCESSED_MESSAGES.add(message_id)
         return SEARCH_ITEM
     
     context.user_data["matching_items"] = matching_items
     context.user_data["page"] = 0
-    PROCESSED_MESSAGES.add(message_id)
     await send_paginated_items(update, context, is_group=False)
     return SEARCH_ITEM
 
@@ -384,6 +400,12 @@ async def send_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, item, a
     audio_type = audio_info.get("type", "unknown")
     base_url = "https://game-assets-prod.platocdn.com/"
     full_url = base_url + audio_url if not audio_url.startswith("http") else audio_url
+    message = update.message if update.message else (update.callback_query.message if update.callback_query else None)
+    
+    if not message:
+        logger.error("پیام برای ارسال وویس پیدا نشد!")
+        return
+    
     try:
         response = requests.get(full_url, timeout=10)
         if response.status_code == 200:
@@ -392,14 +414,14 @@ async def send_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, item, a
                 temp_file_path = temp_file.name
             with open(temp_file_path, "rb") as voice_file:
                 if thread_id:
-                    await update.message.reply_voice(
+                    await message.reply_voice(
                         voice=voice_file,
                         caption=f"🎙 وویس {index} آیتم: {item['name']} (نوع: {audio_type})",
                         reply_markup=reply_markup,
                         message_thread_id=thread_id
                     )
-                elif update.message:
-                    await update.message.reply_voice(
+                else:
+                    await message.reply_voice(
                         voice=voice_file,
                         caption=f"🎙 وویس {index} آیتم: {item['name']} (نوع: {audio_type})",
                         reply_markup=reply_markup
@@ -407,10 +429,10 @@ async def send_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, item, a
             os.remove(temp_file_path)
     except Exception as e:
         logger.error(f"خطا در دانلود یا ارسال وویس {index}: {e}")
-        if thread_id and update.message:
-            await update.message.reply_text(f"مشکلی توی ارسال وویس {index} پیش اومد! 😅", reply_markup=reply_markup, message_thread_id=thread_id)
-        elif update.message:
-            await update.message.reply_text(f"مشکلی توی ارسال وویس {index} پیش اومد! 😅", reply_markup=reply_markup)
+        if thread_id:
+            await message.reply_text(f"مشکلی توی ارسال وویس {index} پیش اومد! 😅", reply_markup=reply_markup, message_thread_id=thread_id)
+        else:
+            await message.reply_text(f"مشکلی توی ارسال وویس {index} پیش اومد! 😅", reply_markup=reply_markup)
 
 async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -445,9 +467,11 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_id = update.message.message_id
-    if message_id in PROCESSED_MESSAGES:
-        logger.warning(f"پیام تکراری در گروه با message_id: {message_id} - نادیده گرفته شد")
-        return
+    with PROCESSING_LOCK:
+        if message_id in PROCESSED_MESSAGES:
+            logger.warning(f"پیام تکراری در گروه با message_id: {message_id} - نادیده گرفته شد")
+            return
+        PROCESSED_MESSAGES.add(message_id)
     
     chat_id = update.effective_chat.id
     try:
@@ -481,7 +505,6 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
     
     context.user_data["matching_items"] = matching_items
     context.user_data["page"] = 0
-    PROCESSED_MESSAGES.add(message_id)
     await send_paginated_items(update, context, is_group=True)
     return
 
@@ -496,7 +519,7 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("آیتم پیدا نشد! 😕")
         return
     
-    price_type = "Pnips" if item["price"]["type"] == "premium" else item["price"]["type"]
+    price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
     price_info = f"{item['price']['value']} {price_type}"
     results_text = (
         f"🏷 نام : {item['name']}\n"
@@ -715,6 +738,7 @@ async def main():
             application.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
             application.add_handler(InlineQueryHandler(inline_query))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
+            application.add_handler(MessageHandler(filters.Regex(r"🏷 نام :"), handle_inline_selection))
             application.add_error_handler(error_handler)
             
             logger.info("در حال آماده‌سازی ربات...")

@@ -31,20 +31,17 @@ EXTRACTED_ITEMS = []
 AI_CHAT_USERS = set()
 SEARCH_ITEM = 1
 SELECT_SIZE, GET_PROMPT = range(2)
-DEFAULT_CHAT_ID = 789912945  # آیدی چت پیش‌فرض (باید آیدی خودت رو بذاری)
-PROCESSED_MESSAGES = set()  # برای جلوگیری از پردازش تکراری
-PROCESSING_LOCK = Lock()  # قفل برای جلوگیری از پردازش همزمان
+DEFAULT_CHAT_ID = 789912945
+PROCESSED_MESSAGES = set()
+PROCESSING_LOCK = Lock()
 
-# پیام سیستمی برای چت
 SYSTEM_MESSAGE = (
     "شما دستیار هوشمند PlatoDex هستید و درمورد پلاتو به کاربران کمک میکنید و به صورت خودمونی جذاب و با ایموجی "
     "حرف میزنی به صورت نسل z و کمی با طنز حرف بزن و شوخی کنه"
 )
 
-# متغیر جهانی برای application
 application = None
 
-# ایجاد سرور FastAPI
 app = FastAPI()
 
 @app.post("/webhook")
@@ -86,10 +83,7 @@ async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
             if not script_tag:
                 logger.error("داده‌های آیتم‌ها پیدا نشد!")
                 if context and hasattr(context.bot, 'send_message'):
-                    try:
-                        await context.bot.send_message(chat_id=DEFAULT_CHAT_ID, text="مشکلی تو بارگذاری آیتم‌ها پیش اومد!")
-                    except Exception as e:
-                        logger.error(f"خطا در ارسال پیام: {e}")
+                    await context.bot.send_message(chat_id=DEFAULT_CHAT_ID, text="مشکلی تو بارگذاری آیتم‌ها پیش اومد!")
                 return
             items_data = json.loads(re.search(r"var items = ({.*?});", script_tag.string, re.DOTALL).group(1))
             table = soup.find("table", id="tool_items_table_default")
@@ -122,10 +116,7 @@ async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
                     })
             logger.info(f"تعداد آیتم‌ها: {len(EXTRACTED_ITEMS)}")
             if context and hasattr(context.bot, 'send_message'):
-                try:
-                    await context.bot.send_message(chat_id=DEFAULT_CHAT_ID, text=f"آیتم‌ها به‌روز شدند! تعداد: {len(EXTRACTED_ITEMS)}")
-                except Exception as e:
-                    logger.error(f"خطا در ارسال پیام: {e}")
+                await context.bot.send_message(chat_id=DEFAULT_CHAT_ID, text=f"آیتم‌ها به‌روز شدند! تعداد: {len(EXTRACTED_ITEMS)}")
             return
         except (requests.RequestException, requests.Timeout) as e:
             logger.error(f"خطا در تلاش {attempt + 1}/{max_retries}: {e}")
@@ -135,10 +126,7 @@ async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
             else:
                 logger.error("همه تلاش‌ها ناموفق بود!")
                 if context and hasattr(context.bot, 'send_message'):
-                    try:
-                        await context.bot.send_message(chat_id=DEFAULT_CHAT_ID, text="خطا در به‌روزرسانی آیتم‌ها! بعداً امتحان کنید.")
-                    except Exception as e:
-                        logger.error(f"خطا در ارسال پیام: {e}")
+                    await context.bot.send_message(chat_id=DEFAULT_CHAT_ID, text="خطا در به‌روزرسانی آیتم‌ها! بعداً امتحان کنید.")
                 return
 
 def schedule_scraping(app: Application):
@@ -269,7 +257,7 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🏷 نام : {item['name']}\n\n"
                 f"🗃 دسته‌بندی : {item['category']}\n"
                 f"📃 توضیحات : {item['description']}\n\n"
-                f"💸 قیمت : {price_info}"
+                f"💸 قیمت : {price_info}\n\n@PlatoDex"
             )
             results.append(
                 InlineQueryResultArticle(
@@ -289,11 +277,8 @@ async def handle_inline_selection(update: Update, context: ContextTypes.DEFAULT_
         return
     
     thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
-    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
     for i, audio_info in enumerate(item["audios"], 1):
-        await send_audio(update, context, item, audio_info, i, reply_markup, thread_id)
+        await send_audio(update, context, item, audio_info, i, None, thread_id)
 
 async def start_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -338,7 +323,7 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
     end_idx = min((page + 1) * items_per_page, len(matching_items))
     current_items = matching_items[start_idx:end_idx]
     
-    if len(matching_items) == 1:
+    if len(matching_items) == 1 and not is_group:
         item = matching_items[0]
         price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
         price_info = f"{item['price']['value']} {price_type}"
@@ -346,25 +331,16 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
             f"🏷 نام : {item['name']}\n"
             f"🗃 دسته‌بندی : {item['category']}\n"
             f"📃 توضیحات : {item['description']}\n"
-            f"💸 قیمت : {price_info}"
+            f"💸 قیمت : {price_info}\n\n@PlatoDex"
         )
         keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        if is_group:
-            thread_id = update.message.message_thread_id if update.message and hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
-            if item["images"]:
-                await update.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup, message_thread_id=thread_id)
-            for i, audio_info in enumerate(item["audios"], 1):
-                await send_audio(update, context, item, audio_info, i, reply_markup, thread_id)
-            if not item["images"] and not item["audios"]:
-                await update.message.reply_text(results_text, reply_markup=reply_markup, message_thread_id=thread_id)
-        else:
-            if item["images"]:
-                await update.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup)
-            for i, audio_info in enumerate(item["audios"], 1):
-                await send_audio(update, context, item, audio_info, i, reply_markup)
-            if not item["images"] and not item["audios"]:
-                await update.message.reply_text(results_text, reply_markup=reply_markup)
+        if item["images"]:
+            await update.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup)
+        for i, audio_info in enumerate(item["audios"], 1):
+            await send_audio(update, context, item, audio_info, i, reply_markup)
+        if not item["images"] and not item["audios"]:
+            await update.message.reply_text(results_text, reply_markup=reply_markup)
         return
     
     keyboard = []
@@ -382,7 +358,8 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
         nav_buttons.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"next_page_{'group' if is_group else 'private'}"))
     if nav_buttons:
         keyboard.append(nav_buttons)
-    keyboard.append([InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")])
+    if not is_group:
+        keyboard.append([InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     message_text = f"این آیتم‌ها رو پیدا کردم (صفحه {page + 1} از {total_pages})، کدوم رو می‌خوای؟ 👇"
@@ -395,7 +372,7 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         await update.message.reply_text(message_text, reply_markup=reply_markup)
 
-async def send_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, item, audio_info, index, reply_markup, thread_id=None):
+async def send_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, item, audio_info, index, reply_markup=None, thread_id=None):
     audio_url = audio_info["uri"]
     audio_type = audio_info.get("type", "unknown")
     base_url = "https://game-assets-prod.platocdn.com/"
@@ -414,25 +391,25 @@ async def send_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, item, a
                 temp_file_path = temp_file.name
             with open(temp_file_path, "rb") as voice_file:
                 if thread_id:
-                    await message.reply_voice(
+                    await context.bot.send_voice(
+                        chat_id=message.chat_id,
                         voice=voice_file,
-                        caption=f"🎙 وویس {index} آیتم: {item['name']} (نوع: {audio_type})",
-                        reply_markup=reply_markup,
+                        caption=f"{audio_type}",
                         message_thread_id=thread_id
                     )
                 else:
-                    await message.reply_voice(
+                    await context.bot.send_voice(
+                        chat_id=message.chat_id,
                         voice=voice_file,
-                        caption=f"🎙 وویس {index} آیتم: {item['name']} (نوع: {audio_type})",
-                        reply_markup=reply_markup
+                        caption=f"{audio_type}"
                     )
             os.remove(temp_file_path)
     except Exception as e:
         logger.error(f"خطا در دانلود یا ارسال وویس {index}: {e}")
         if thread_id:
-            await message.reply_text(f"مشکلی توی ارسال وویس {index} پیش اومد! 😅", reply_markup=reply_markup, message_thread_id=thread_id)
+            await message.reply_text(f"مشکلی توی ارسال وویس {index} پیش اومد! 😅", message_thread_id=thread_id)
         else:
-            await message.reply_text(f"مشکلی توی ارسال وویس {index} پیش اومد! 😅", reply_markup=reply_markup)
+            await message.reply_text(f"مشکلی توی ارسال وویس {index} پیش اومد! 😅")
 
 async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -450,7 +427,7 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🏷 نام : {item['name']}\n"
         f"🗃 دسته‌بندی : {item['category']}\n"
         f"📃 توضیحات : {item['description']}\n"
-        f"💸 قیمت : {price_info}"
+        f"💸 قیمت : {price_info}\n\n@PlatoDex"
     )
     
     keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
@@ -484,29 +461,95 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
             await update.message.reply_text("یه مشکلی پیش اومد، نمی‌تونم چت رو پیدا کنم! 😅")
         return
     
+    thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
+    
     if not context.args:
-        thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
-        await update.message.reply_text(
-            "لطفاً اسم آیتم رو بعد از /i بنویس! مثلاً: /i Macaron",
-            message_thread_id=thread_id
-        )
+        # نمایش دسته‌بندی‌ها وقتی /i بدون آرگومان وارد بشه
+        categories = sorted(set(item["category"] for item in EXTRACTED_ITEMS))
+        context.user_data["categories"] = categories
+        context.user_data["page"] = 0
+        await send_paginated_categories(update, context)
         return
     
     item_name = " ".join(context.args).strip().lower()
     matching_items = [item for item in EXTRACTED_ITEMS if item_name in item["name"].lower()]
     
     if not matching_items:
-        thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
         await update.message.reply_text(
             f"متأسفم، آیتمی با اسم '{item_name}' پیدا نشد! 😕",
             message_thread_id=thread_id
         )
         return
     
+    item = matching_items[0]  # فقط اولین آیتم رو نشون میدیم
+    price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
+    price_info = f"{item['price']['value']} {price_type}"
+    results_text = (
+        f"🏷 نام : {item['name']}\n"
+        f"🗃 دسته‌بندی : {item['category']}\n"
+        f"📃 توضیحات : {item['description']}\n"
+        f"💸 قیمت : {price_info}\n\n@PlatoDex"
+    )
+    
+    if item["images"]:
+        await update.message.reply_photo(
+            photo=item["images"][0],
+            caption=results_text,
+            reply_to_message_id=update.message.message_id,
+            message_thread_id=thread_id
+        )
+    else:
+        await update.message.reply_text(
+            results_text,
+            reply_to_message_id=update.message.message_id,
+            message_thread_id=thread_id
+        )
+    
+    for i, audio_info in enumerate(item["audios"], 1):
+        await send_audio(update, context, item, audio_info, i, None, thread_id)
+
+async def send_paginated_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    categories = context.user_data["categories"]
+    page = context.user_data["page"]
+    items_per_page = 10
+    total_pages = (len(categories) + items_per_page - 1) // items_per_page
+    
+    start_idx = page * items_per_page
+    end_idx = min((page + 1) * items_per_page, len(categories))
+    current_categories = categories[start_idx:end_idx]
+    
+    keyboard = []
+    for i, category in enumerate(current_categories, start_idx + 1):
+        callback_data = f"select_category_{category}"
+        keyboard.append([InlineKeyboardButton(f"{i}. {category}", callback_data=callback_data)])
+    
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ قبلی", callback_data="prev_page_group_categories"))
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("بعدی ➡️", callback_data="next_page_group_categories"))
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    message_text = f"دسته‌بندی‌ها (صفحه {page + 1} از {total_pages})، کدوم رو می‌خوای؟ 👇"
+    
+    thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
+    await update.message.reply_text(message_text, reply_markup=reply_markup, message_thread_id=thread_id)
+
+async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    category = query.data.replace("select_category_", "")
+    matching_items = [item for item in EXTRACTED_ITEMS if item["category"] == category]
+    
+    if not matching_items:
+        await query.edit_message_text(f"هیچ آیتمی تو دسته‌بندی '{category}' پیدا نشد! 😕")
+        return
+    
     context.user_data["matching_items"] = matching_items
     context.user_data["page"] = 0
     await send_paginated_items(update, context, is_group=True)
-    return
 
 async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -525,11 +568,8 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🏷 نام : {item['name']}\n"
         f"🗃 دسته‌بندی : {item['category']}\n"
         f"📃 توضیحات : {item['description']}\n"
-        f"💸 قیمت : {price_info}"
+        f"💸 قیمت : {price_info}\n\n@PlatoDex"
     )
-    
-    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     
     if item["images"]:
         image_url = item["images"][0]
@@ -546,39 +586,42 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_animation(
                 animation=input_file,
                 caption=results_text,
-                reply_markup=reply_markup,
                 message_thread_id=thread_id
             )
         elif image_url.lower().endswith('.gif'):
             await query.message.reply_animation(
                 animation=image_url,
                 caption=results_text,
-                reply_markup=reply_markup,
                 message_thread_id=thread_id
             )
         else:
             await query.message.reply_photo(
                 photo=image_url,
                 caption=results_text,
-                reply_markup=reply_markup,
                 message_thread_id=thread_id
             )
+    else:
+        await query.edit_message_text(results_text)
+    
     for i, audio_info in enumerate(item["audios"], 1):
-        await send_audio(update, context, item, audio_info, i, reply_markup, thread_id)
-    if not item["images"] and not item["audios"]:
-        await query.edit_message_text(results_text, reply_markup=reply_markup)
-    return
+        await send_audio(update, context, item, audio_info, i, None, thread_id)
 
 async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    is_group = "group" in query.data
-    if "next_page" in query.data:
-        context.user_data["page"] += 1
-    elif "prev_page" in query.data:
-        context.user_data["page"] -= 1
-    
-    await send_paginated_items(update, context, is_group=is_group)
+    if "group_categories" in query.data:
+        if "next_page" in query.data:
+            context.user_data["page"] += 1
+        elif "prev_page" in query.data:
+            context.user_data["page"] -= 1
+        await send_paginated_categories(update, context)
+    else:
+        is_group = "group" in query.data
+        if "next_page" in query.data:
+            context.user_data["page"] += 1
+        elif "prev_page" in query.data:
+            context.user_data["page"] -= 1
+        await send_paginated_items(update, context, is_group=is_group)
     return SEARCH_ITEM if not is_group else None
 
 async def chat_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -731,7 +774,9 @@ async def main():
             application.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
             application.add_handler(CommandHandler("i", process_item_in_group, filters=filters.ChatType.GROUPS))
             application.add_handler(CallbackQueryHandler(select_group_item, pattern="^select_group_item_"))
-            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_group$"))
+            application.add_handler(CallbackQueryHandler(select_category, pattern="^select_category_"))
+            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_group"))
+            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_group_categories"))
             application.add_handler(search_conv_handler)
             application.add_handler(image_conv_handler)
             application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))

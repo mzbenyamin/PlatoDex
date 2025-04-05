@@ -12,13 +12,15 @@ from fastapi import FastAPI, Request
 import uvicorn
 from PIL import Image
 import io
+import tempfile
+import os
 
 # تنظیم لاگ
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # توکن و آدرس‌ها
-TOKEN = '7764880184:AAEAp5oyNfB__Cotdmtxb9BHnWgwydRN0ME'
+TOKEN = '8011536409:AAGUT4m9BFxnQxppgBtbIrMXV-wF19txobs'
 IMAGE_API_URL = 'https://pollinations.ai/prompt/'
 TEXT_API_URL = 'https://text.pollinations.ai/'
 URL = "https://platopedia.com/items"
@@ -70,7 +72,7 @@ async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
 
     for attempt in range(max_retries):
         try:
-            response = requests.get(URL, timeout=30)  # افزایش تایم‌اوت به 30 ثانیه
+            response = requests.get(URL, timeout=30)
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
             script_tag = soup.find("script", string=re.compile(r"var items = {"))
@@ -111,7 +113,7 @@ async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
             logger.info(f"تعداد آیتم‌ها: {len(EXTRACTED_ITEMS)}")
             if context:
                 await context.bot.send_message(chat_id=DEFAULT_CHAT_ID, text=f"آیتم‌ها به‌روز شدند! تعداد: {len(EXTRACTED_ITEMS)}")
-            return  # اگه موفق بود، خارج می‌شیم
+            return
         except (requests.RequestException, requests.Timeout) as e:
             logger.error(f"خطا در تلاش {attempt + 1}/{max_retries}: {e}")
             if attempt < max_retries - 1:
@@ -308,22 +310,62 @@ async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE
             price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
             price_info = f"{item['price']['value']} {price_type}"
             results_text = (
-                f"🏷 نام : {item['name']}\n\n"
+                f"🏷 نام : {item['name']}\n"
                 f"🗃 دسته‌بندی : {item['category']}\n"
-                f"📃 توضیحات : {item['description']}\n\n"
+                f"📃 توضیحات : {item['description']}\n"
                 f"💸 قیمت : {price_info}"
             )
+            
+            # ارسال تصویر اگه وجود داشته باشه
             if item["images"]:
                 await update.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup)
-            elif item["audios"]:
-                await update.message.reply_audio(audio=item["audios"][0]["uri"], caption=results_text, reply_markup=reply_markup)
-            else:
+            
+            # ارسال وویس اگه صدا داشته باشه
+            if item["audios"]:
+                audio_info = item["audios"][0]  # اولین فایل صوتی
+                audio_url = audio_info["uri"]
+                base_url = "https://game-assets-prod.platocdn.com/"
+                
+                # ساخت URL کامل
+                full_url = base_url + audio_url if not audio_url.startswith("http") else audio_url
+                
+                # دانلود فایل صوتی
+                try:
+                    response = requests.get(full_url, timeout=10)
+                    if response.status_code == 200:
+                        # استفاده از tempfile برای ذخیره موقت
+                        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as temp_file:
+                            temp_file.write(response.content)
+                            temp_file_path = temp_file.name
+                        
+                        # ارسال به‌صورت وویس
+                        with open(temp_file_path, "rb") as voice_file:
+                            await update.message.reply_voice(
+                                voice=voice_file,
+                                caption=f"🎙 وویس آیتم: {item['name']}",
+                                reply_markup=reply_markup
+                            )
+                        # حذف فایل موقت
+                        os.remove(temp_file_path)
+                    else:
+                        await update.message.reply_text(
+                            f"خطا در دانلود وویس: {response.status_code}",
+                            reply_markup=reply_markup
+                        )
+                except Exception as e:
+                    logger.error(f"خطا در دانلود یا ارسال وویس: {e}")
+                    await update.message.reply_text(
+                        "مشکلی توی دانلود وویس آیتم پیش اومد! 😅",
+                        reply_markup=reply_markup
+                    )
+            # اگه نه عکس داشت نه صدا
+            elif not item["images"]:
                 await update.message.reply_text(results_text, reply_markup=reply_markup)
+    
     return SEARCH_ITEM
 
 # تابع جدید برای جستجوی آیتم در گروه با /i
 async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # چک کردن اینکه ربات هنوز توی چت هست یا نه
     chat_id = update.effective_chat.id
     try:
         await context.bot.get_chat(chat_id)
@@ -362,46 +404,33 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
         f"💸 قیمت : {price_info}"
     )
     
-    # گرفتن thread ID فقط اگه پیام توی تاپیک باشه
     thread_id = update.message.message_thread_id if update.message.is_topic_message else None
     
     try:
         if item["images"]:
             image_url = item["images"][0]
             if image_url.lower().endswith('.webp'):
-                # دانلود تصویر
                 response = requests.get(image_url, timeout=10)
                 response.raise_for_status()
-                
-                # باز کردن تصویر با Pillow
                 img = Image.open(io.BytesIO(response.content))
-                
-                # تبدیل به GIF (چه متحرک باشه چه نه)
                 gif_buffer = io.BytesIO()
                 if img.mode != 'RGBA':
                     img = img.convert('RGBA')
-                # اگه تصویر متحرکه، همه فریم‌ها رو ذخیره کن؛ اگه نه، فقط یه فریم
                 img.save(gif_buffer, format='GIF', save_all=True, optimize=True)
                 gif_buffer.seek(0)
-                
-                # ایجاد InputFile با نام فایل (بدون mime_type)
                 input_file = InputFile(gif_buffer, filename="animation.gif")
-                
-                # ارسال به صورت انیمیشن
                 await update.message.reply_animation(
                     animation=input_file,
                     caption=result_text,
                     message_thread_id=thread_id
                 )
             elif image_url.lower().endswith('.gif'):
-                # اگه از قبل GIF بود، مستقیم بفرست
                 await update.message.reply_animation(
                     animation=image_url,
                     caption=result_text,
                     message_thread_id=thread_id
                 )
             else:
-                # برای فرمت‌های دیگه (مثل PNG یا JPG)
                 await update.message.reply_photo(
                     photo=image_url,
                     caption=result_text,
@@ -501,7 +530,7 @@ async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Chat with AI 🤖", callback_data="chat_with_ai")],
         [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")]
     ]
-    await query.message.reply_text(
+    await update.message.reply_text(
         text=welcome_message,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
@@ -535,8 +564,7 @@ async def main():
                 logger.error("JobQueue فعال نیست!")
                 raise RuntimeError("JobQueue فعال نیست!")
             
-            # تنظیم Webhook
-            webhook_url = "https://platodex.onrender.com/webhook"  # آدرس سرور Render + مسیر webhook
+            webhook_url = "https://platodex.onrender.com/webhook"
             await application.bot.set_webhook(url=webhook_url)
             
             schedule_scraping(application)
@@ -592,7 +620,6 @@ async def main():
             logger.info("در حال شروع ربات...")
             await application.start()
             
-            # به جای start_polling، سرور FastAPI رو اجرا می‌کنیم
             config = uvicorn.Config(app, host="0.0.0.0", port=8000)
             server = uvicorn.Server(config)
             await server.serve()

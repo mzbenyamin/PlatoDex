@@ -31,6 +31,7 @@ AI_CHAT_USERS = set()
 SEARCH_ITEM = 1
 SELECT_SIZE, GET_PROMPT = range(2)
 DEFAULT_CHAT_ID = 789912945  # آیدی چت پیش‌فرض (باید آیدی خودت رو بذاری)
+PROCESSED_MESSAGES = set()  # برای جلوگیری از پردازش تکراری
 
 # پیام سیستمی برای چت
 SYSTEM_MESSAGE = (
@@ -49,6 +50,12 @@ async def webhook(request: Request):
     global application
     update = await request.json()
     update_obj = Update.de_json(update, application.bot)
+    update_id = update_obj.update_id
+    logger.info(f"دریافت درخواست با update_id: {update_id}")
+    if update_id in PROCESSED_MESSAGES:
+        logger.warning(f"درخواست تکراری با update_id: {update_id} - نادیده گرفته شد")
+        return {"status": "ok"}
+    PROCESSED_MESSAGES.add(update_id)
     asyncio.create_task(application.process_update(update_obj))
     return {"status": "ok"}
 
@@ -285,8 +292,10 @@ async def start_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SEARCH_ITEM
 
 async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if "processed_message_id" in context.user_data and context.user_data["processed_message_id"] == update.message.message_id:
-        return SEARCH_ITEM  # جلوگیری از پردازش دوباره
+    message_id = update.message.message_id
+    if message_id in PROCESSED_MESSAGES:
+        logger.warning(f"پیام تکراری در چت خصوصی با message_id: {message_id} - نادیده گرفته شد")
+        return SEARCH_ITEM
     
     user_input = update.message.text.strip().lower()
     matching_items = [item for item in EXTRACTED_ITEMS if user_input in item["name"].lower() or user_input in item["category"].lower()]
@@ -294,12 +303,12 @@ async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not matching_items:
         keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
         await update.message.reply_text("هیچ آیتمی پیدا نشد! 😕", reply_markup=InlineKeyboardMarkup(keyboard))
-        context.user_data["processed_message_id"] = update.message.message_id
+        PROCESSED_MESSAGES.add(message_id)
         return SEARCH_ITEM
     
     context.user_data["matching_items"] = matching_items
     context.user_data["page"] = 0
-    context.user_data["processed_message_id"] = update.message.message_id
+    PROCESSED_MESSAGES.add(message_id)
     await send_paginated_items(update, context, is_group=False)
     return SEARCH_ITEM
 
@@ -435,8 +444,10 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SEARCH_ITEM
 
 async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if "processed_message_id" in context.user_data and context.user_data["processed_message_id"] == update.message.message_id:
-        return  # جلوگیری از پردازش دوباره
+    message_id = update.message.message_id
+    if message_id in PROCESSED_MESSAGES:
+        logger.warning(f"پیام تکراری در گروه با message_id: {message_id} - نادیده گرفته شد")
+        return
     
     chat_id = update.effective_chat.id
     try:
@@ -470,7 +481,7 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
     
     context.user_data["matching_items"] = matching_items
     context.user_data["page"] = 0
-    context.user_data["processed_message_id"] = update.message.message_id
+    PROCESSED_MESSAGES.add(message_id)
     await send_paginated_items(update, context, is_group=True)
     return
 
@@ -485,7 +496,7 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("آیتم پیدا نشد! 😕")
         return
     
-    price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
+    price_type = "Pnips" if item["price"]["type"] == "premium" else item["price"]["type"]
     price_info = f"{item['price']['value']} {price_type}"
     results_text = (
         f"🏷 نام : {item['name']}\n"
@@ -695,7 +706,7 @@ async def main():
             )
             
             application.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
-            application.add_handler(CommandHandler("i", process_item_in_group))
+            application.add_handler(CommandHandler("i", process_item_in_group, filters=filters.ChatType.GROUPS))
             application.add_handler(CallbackQueryHandler(select_group_item, pattern="^select_group_item_"))
             application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_group$"))
             application.add_handler(search_conv_handler)
@@ -703,7 +714,7 @@ async def main():
             application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
             application.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
             application.add_handler(InlineQueryHandler(inline_query))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_message))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
             application.add_error_handler(error_handler)
             
             logger.info("در حال آماده‌سازی ربات...")

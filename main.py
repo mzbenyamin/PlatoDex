@@ -287,64 +287,114 @@ async def start_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_input = update.message.text.strip().lower()
     matching_items = [item for item in EXTRACTED_ITEMS if user_input in item["name"].lower() or user_input in item["category"].lower()]
-    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
     
     if not matching_items:
+        keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
         await update.message.reply_text("هیچ آیتمی پیدا نشد! 😕", reply_markup=InlineKeyboardMarkup(keyboard))
         return SEARCH_ITEM
     
-    if len(matching_items) > 1:
-        keyboard = []
-        for i, item in enumerate(matching_items, 1):
-            price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-            price_info = f"{item['price']['value']} {price_type}"
-            button_text = f"{i}. {item['name']} - {price_info}"
-            callback_data = f"select_item_{item['id']}"
-            keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
-        keyboard.append([InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("این آیتم‌ها رو پیدا کردم، کدوم رو می‌خوای؟ 👇", reply_markup=reply_markup)
-        return SEARCH_ITEM
+    context.user_data["matching_items"] = matching_items
+    context.user_data["page"] = 0
+    await send_paginated_items(update, context, is_group=False)
+    return SEARCH_ITEM
+
+async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYPE, is_group=False):
+    matching_items = context.user_data["matching_items"]
+    page = context.user_data["page"]
+    items_per_page = 10
+    total_pages = (len(matching_items) + items_per_page - 1) // items_per_page
     
-    item = matching_items[0]
-    price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-    price_info = f"{item['price']['value']} {price_type}"
-    results_text = (
-        f"🏷 نام : {item['name']}\n"
-        f"🗃 دسته‌بندی : {item['category']}\n"
-        f"📃 توضیحات : {item['description']}\n"
-        f"💸 قیمت : {price_info}"
-    )
+    start_idx = page * items_per_page
+    end_idx = min((page + 1) * items_per_page, len(matching_items))
+    current_items = matching_items[start_idx:end_idx]
+    
+    if len(matching_items) == 1:
+        item = matching_items[0]
+        price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
+        price_info = f"{item['price']['value']} {price_type}"
+        results_text = (
+            f"🏷 نام : {item['name']}\n"
+            f"🗃 دسته‌بندی : {item['category']}\n"
+            f"📃 توضیحات : {item['description']}\n"
+            f"💸 قیمت : {price_info}"
+        )
+        keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        if is_group:
+            thread_id = update.message.message_thread_id if update.message.is_topic_message else None
+            if item["images"]:
+                await update.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup, message_thread_id=thread_id)
+            for i, audio_info in enumerate(item["audios"], 1):
+                await send_audio(update, context, item, audio_info, i, reply_markup, thread_id)
+            if not item["images"] and not item["audios"]:
+                await update.message.reply_text(results_text, reply_markup=reply_markup, message_thread_id=thread_id)
+        else:
+            if item["images"]:
+                await update.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup)
+            for i, audio_info in enumerate(item["audios"], 1):
+                await send_audio(update, context, item, audio_info, i, reply_markup)
+            if not item["images"] and not item["audios"]:
+                await update.message.reply_text(results_text, reply_markup=reply_markup)
+        return
+    
+    keyboard = []
+    for i, item in enumerate(current_items, start_idx + 1):
+        price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
+        price_info = f"{item['price']['value']} {price_type}"
+        button_text = f"{i}. {item['name']} - {price_info}"
+        callback_data = f"select{'_group' if is_group else ''}_item_{item['id']}"
+        keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+    
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"prev_page_{'group' if is_group else 'private'}"))
+    if page < total_pages - 1:
+        nav_buttons.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"next_page_{'group' if is_group else 'private'}"))
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    keyboard.append([InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
-    if item["images"]:
-        await update.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup)
-    if item["audios"]:
-        for i, audio_info in enumerate(item["audios"], 1):
-            audio_url = audio_info["uri"]
-            audio_type = audio_info.get("type", "unknown")
-            base_url = "https://game-assets-prod.platocdn.com/"
-            full_url = base_url + audio_url if not audio_url.startswith("http") else audio_url
-            try:
-                response = requests.get(full_url, timeout=10)
-                if response.status_code == 200:
-                    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as temp_file:
-                        temp_file.write(response.content)
-                        temp_file_path = temp_file.name
-                    with open(temp_file_path, "rb") as voice_file:
-                        await update.message.reply_voice(
-                            voice=voice_file,
-                            caption=f"🎙 وویس {i} آیتم: {item['name']} (نوع: {audio_type})",
-                            reply_markup=reply_markup
-                        )
-                    os.remove(temp_file_path)
-            except Exception as e:
-                logger.error(f"خطا در دانلود یا ارسال وویس {i}: {e}")
-                await update.message.reply_text(f"مشکلی توی ارسال وویس {i} پیش اومد! 😅", reply_markup=reply_markup)
-    elif not item["images"]:
-        await update.message.reply_text(results_text, reply_markup=reply_markup)
+    message_text = f"این آیتم‌ها رو پیدا کردم (صفحه {page + 1} از {total_pages})، کدوم رو می‌خوای؟ 👇"
     
-    return SEARCH_ITEM
+    if is_group:
+        thread_id = update.message.message_thread_id if update.message.is_topic_message else None
+        await update.message.reply_text(message_text, reply_markup=reply_markup, message_thread_id=thread_id)
+    else:
+        await update.message.reply_text(message_text, reply_markup=reply_markup)
+
+async def send_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, item, audio_info, index, reply_markup, thread_id=None):
+    audio_url = audio_info["uri"]
+    audio_type = audio_info.get("type", "unknown")
+    base_url = "https://game-assets-prod.platocdn.com/"
+    full_url = base_url + audio_url if not audio_url.startswith("http") else audio_url
+    try:
+        response = requests.get(full_url, timeout=10)
+        if response.status_code == 200:
+            with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as temp_file:
+                temp_file.write(response.content)
+                temp_file_path = temp_file.name
+            with open(temp_file_path, "rb") as voice_file:
+                if thread_id:
+                    await update.message.reply_voice(
+                        voice=voice_file,
+                        caption=f"🎙 وویس {index} آیتم: {item['name']} (نوع: {audio_type})",
+                        reply_markup=reply_markup,
+                        message_thread_id=thread_id
+                    )
+                else:
+                    await update.message.reply_voice(
+                        voice=voice_file,
+                        caption=f"🎙 وویس {index} آیتم: {item['name']} (نوع: {audio_type})",
+                        reply_markup=reply_markup
+                    )
+            os.remove(temp_file_path)
+    except Exception as e:
+        logger.error(f"خطا در دانلود یا ارسال وویس {index}: {e}")
+        if thread_id:
+            await update.message.reply_text(f"مشکلی توی ارسال وویس {index} پیش اومد! 😅", reply_markup=reply_markup, message_thread_id=thread_id)
+        else:
+            await update.message.reply_text(f"مشکلی توی ارسال وویس {index} پیش اومد! 😅", reply_markup=reply_markup)
 
 async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -370,29 +420,9 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if item["images"]:
         await query.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup)
-    if item["audios"]:
-        for i, audio_info in enumerate(item["audios"], 1):
-            audio_url = audio_info["uri"]
-            audio_type = audio_info.get("type", "unknown")
-            base_url = "https://game-assets-prod.platocdn.com/"
-            full_url = base_url + audio_url if not audio_url.startswith("http") else audio_url
-            try:
-                response = requests.get(full_url, timeout=10)
-                if response.status_code == 200:
-                    with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as temp_file:
-                        temp_file.write(response.content)
-                        temp_file_path = temp_file.name
-                    with open(temp_file_path, "rb") as voice_file:
-                        await query.message.reply_voice(
-                            voice=voice_file,
-                            caption=f"🎙 وویس {i} آیتم: {item['name']} (نوع: {audio_type})",
-                            reply_markup=reply_markup
-                        )
-                    os.remove(temp_file_path)
-            except Exception as e:
-                logger.error(f"خطا در دانلود یا ارسال وویس {i}: {e}")
-                await query.message.reply_text(f"مشکلی توی ارسال وویس {i} پیش اومد! 😅", reply_markup=reply_markup)
-    elif not item["images"]:
+    for i, audio_info in enumerate(item["audios"], 1):
+        await send_audio(update, context, item, audio_info, i, reply_markup)
+    if not item["images"] and not item["audios"]:
         await query.edit_message_text(results_text, reply_markup=reply_markup)
     
     return SEARCH_ITEM
@@ -418,107 +448,19 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
     
     item_name = " ".join(context.args).strip().lower()
     matching_items = [item for item in EXTRACTED_ITEMS if item_name in item["name"].lower()]
-    thread_id = update.message.message_thread_id if update.message.is_topic_message else None
     
     if not matching_items:
+        thread_id = update.message.message_thread_id if update.message.is_topic_message else None
         await update.message.reply_text(
             f"متأسفم، آیتمی با اسم '{item_name}' پیدا نشد! 😕",
             message_thread_id=thread_id
         )
         return
     
-    if len(matching_items) > 1:
-        keyboard = []
-        for i, item in enumerate(matching_items, 1):
-            price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-            price_info = f"{item['price']['value']} {price_type}"
-            button_text = f"{i}. {item['name']} - {price_info}"
-            callback_data = f"select_group_item_{item['id']}"
-            keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text(
-            "این آیتم‌ها رو پیدا کردم، کدوم رو می‌خوای؟ 👇",
-            reply_markup=reply_markup,
-            message_thread_id=thread_id
-        )
-        return
-    
-    item = matching_items[0]
-    price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-    price_info = f"{item['price']['value']} {price_type}"
-    result_text = (
-        f"🏷 نام : {item['name']}\n"
-        f"🗃 دسته‌بندی : {item['category']}\n"
-        f"📃 توضیحات : {item['description']}\n"
-        f"💸 قیمت : {price_info}"
-    )
-    
-    try:
-        if item["images"]:
-            image_url = item["images"][0]
-            if image_url.lower().endswith('.webp'):
-                response = requests.get(image_url, timeout=10)
-                response.raise_for_status()
-                img = Image.open(io.BytesIO(response.content))
-                gif_buffer = io.BytesIO()
-                if img.mode != 'RGBA':
-                    img = img.convert('RGBA')
-                img.save(gif_buffer, format='GIF', save_all=True, optimize=True)
-                gif_buffer.seek(0)
-                input_file = InputFile(gif_buffer, filename="animation.gif")
-                await update.message.reply_animation(
-                    animation=input_file,
-                    caption=result_text,
-                    message_thread_id=thread_id
-                )
-            elif image_url.lower().endswith('.gif'):
-                await update.message.reply_animation(
-                    animation=image_url,
-                    caption=result_text,
-                    message_thread_id=thread_id
-                )
-            else:
-                await update.message.reply_photo(
-                    photo=image_url,
-                    caption=result_text,
-                    message_thread_id=thread_id
-                )
-        if item["audios"]:
-            for i, audio_info in enumerate(item["audios"], 1):
-                audio_url = audio_info["uri"]
-                audio_type = audio_info.get("type", "unknown")
-                base_url = "https://game-assets-prod.platocdn.com/"
-                full_url = base_url + audio_url if not audio_url.startswith("http") else audio_url
-                try:
-                    response = requests.get(full_url, timeout=10)
-                    if response.status_code == 200:
-                        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as temp_file:
-                            temp_file.write(response.content)
-                            temp_file_path = temp_file.name
-                        with open(temp_file_path, "rb") as voice_file:
-                            await update.message.reply_voice(
-                                voice=voice_file,
-                                caption=f"🎙 وویس {i} آیتم: {item['name']} (نوع: {audio_type})",
-                                message_thread_id=thread_id
-                            )
-                        os.remove(temp_file_path)
-                except Exception as e:
-                    logger.error(f"خطا در دانلود یا ارسال وویس {i}: {e}")
-                    await update.message.reply_text(
-                        f"مشکلی توی ارسال وویس {i} پیش اومد! 😅",
-                        message_thread_id=thread_id
-                    )
-        elif not item["images"]:
-            await update.message.reply_text(
-                result_text,
-                message_thread_id=thread_id
-            )
-    except Exception as e:
-        logger.error(f"خطا در ارسال پیام یا تبدیل تصویر: {e}")
-        await update.message.reply_text(
-            "یه مشکلی پیش اومد، نمی‌تونم جواب بدم! 😅 بعداً دوباره امتحان کن.",
-            message_thread_id=thread_id
-        )
+    context.user_data["matching_items"] = matching_items
+    context.user_data["page"] = 0
+    await send_paginated_items(update, context, is_group=True)
+    return
 
 async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -540,69 +482,63 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"💸 قیمت : {price_info}"
     )
     
-    try:
-        if item["images"]:
-            image_url = item["images"][0]
-            if image_url.lower().endswith('.webp'):
-                response = requests.get(image_url, timeout=10)
-                response.raise_for_status()
-                img = Image.open(io.BytesIO(response.content))
-                gif_buffer = io.BytesIO()
-                if img.mode != 'RGBA':
-                    img = img.convert('RGBA')
-                img.save(gif_buffer, format='GIF', save_all=True, optimize=True)
-                gif_buffer.seek(0)
-                input_file = InputFile(gif_buffer, filename="animation.gif")
-                await query.message.reply_animation(
-                    animation=input_file,
-                    caption=results_text,
-                    message_thread_id=thread_id
-                )
-            elif image_url.lower().endswith('.gif'):
-                await query.message.reply_animation(
-                    animation=image_url,
-                    caption=results_text,
-                    message_thread_id=thread_id
-                )
-            else:
-                await query.message.reply_photo(
-                    photo=image_url,
-                    caption=results_text,
-                    message_thread_id=thread_id
-                )
-        if item["audios"]:
-            for i, audio_info in enumerate(item["audios"], 1):
-                audio_url = audio_info["uri"]
-                audio_type = audio_info.get("type", "unknown")
-                base_url = "https://game-assets-prod.platocdn.com/"
-                full_url = base_url + audio_url if not audio_url.startswith("http") else audio_url
-                try:
-                    response = requests.get(full_url, timeout=10)
-                    if response.status_code == 200:
-                        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as temp_file:
-                            temp_file.write(response.content)
-                            temp_file_path = temp_file.name
-                        with open(temp_file_path, "rb") as voice_file:
-                            await query.message.reply_voice(
-                                voice=voice_file,
-                                caption=f"🎙 وویس {i} آیتم: {item['name']} (نوع: {audio_type})",
-                                message_thread_id=thread_id
-                            )
-                        os.remove(temp_file_path)
-                except Exception as e:
-                    logger.error(f"خطا در دانلود یا ارسال وویس {i}: {e}")
-                    await query.message.reply_text(
-                        f"مشکلی توی ارسال وویس {i} پیش اومد! 😅",
-                        message_thread_id=thread_id
-                    )
-        elif not item["images"]:
-            await query.edit_message_text(results_text)
-    except Exception as e:
-        logger.error(f"خطا در ارسال پیام یا تبدیل تصویر: {e}")
-        await query.message.reply_text(
-            "یه مشکلی پیش اومد، نمی‌تونم جواب بدم! 😅 بعداً دوباره امتحان کن.",
-            message_thread_id=thread_id
-        )
+    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    if item["images"]:
+        image_url = item["images"][0]
+        if image_url.lower().endswith('.webp'):
+            response = requests.get(image_url, timeout=10)
+            response.raise_for_status()
+            img = Image.open(io.BytesIO(response.content))
+            gif_buffer = io.BytesIO()
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+            img.save(gif_buffer, format='GIF', save_all=True, optimize=True)
+            gif_buffer.seek(0)
+            input_file = InputFile(gif_buffer, filename="animation.gif")
+            await query.message.reply_animation(
+                animation=input_file,
+                caption=results_text,
+                reply_markup=reply_markup,
+                message_thread_id=thread_id
+            )
+        elif image_url.lower().endswith('.gif'):
+            await query.message.reply_animation(
+                animation=image_url,
+                caption=results_text,
+                reply_markup=reply_markup,
+                message_thread_id=thread_id
+            )
+        else:
+            await query.message.reply_photo(
+                photo=image_url,
+                caption=results_text,
+                reply_markup=reply_markup,
+                message_thread_id=thread_id
+            )
+    for i, audio_info in enumerate(item["audios"], 1):
+        await send_audio(update, context, item, audio_info, i, reply_markup, thread_id)
+    if not item["images"] and not item["audios"]:
+        await query.edit_message_text(results_text, reply_markup=reply_markup)
+    return
+
+async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    is_group = "group" in query.data
+    if "next_page" in query.data:
+        context.user_data["page"] += 1
+    elif "prev_page" in query.data:
+        context.user_data["page"] -= 1
+    
+    if is_group:
+        await query.edit_message_text("در حال بارگذاری...", reply_markup=None)
+        await send_paginated_items(update, context, is_group=True)
+    else:
+        await query.edit_message_text("در حال بارگذاری...", reply_markup=None)
+        await send_paginated_items(update, context, is_group=False)
+    return SEARCH_ITEM if not is_group else None
 
 async def chat_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -720,6 +656,7 @@ async def main():
                     SEARCH_ITEM: [
                         MessageHandler(filters.TEXT & ~filters.COMMAND, process_item_search),
                         CallbackQueryHandler(select_item, pattern="^select_item_"),
+                        CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_private$"),
                         CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
                     ]
                 },
@@ -753,6 +690,7 @@ async def main():
             application.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
             application.add_handler(CommandHandler("i", process_item_in_group))
             application.add_handler(CallbackQueryHandler(select_group_item, pattern="^select_group_item_"))
+            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_group$"))
             application.add_handler(search_conv_handler)
             application.add_handler(image_conv_handler)
             application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))

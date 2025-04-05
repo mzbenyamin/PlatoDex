@@ -21,7 +21,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # توکن و آدرس‌ها
-TOKEN = '8011536409:AAGUT4m9BFxnQxppgBtbIrMXV-wF19txobs'
+TOKEN = '7764880184:AAEAp5oyNfB__Cotdmtxb9BHnWgwydRN0ME'
 IMAGE_API_URL = 'https://pollinations.ai/prompt/'
 TEXT_API_URL = 'https://text.pollinations.ai/'
 URL = "https://platopedia.com/items"
@@ -254,20 +254,20 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
             price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
             price_info = f"{item['price']['value']} {price_type}"
             result_content = (
-                f"**🔖 نام**: {item['name']}\n"
+                f"*🔖 نام*: {item['name']}\n"
                 f"\n"
-                f"**🗃 دسته‌بندی**: {item['category']}\n"
-                f"**📃 توضیحات**: {item['description']}\n"
+                f"*🗃 دسته‌بندی*: {item['category']}\n"
+                f"*📃 توضیحات*: {item['description']}\n"
                 f"\n"
-                f"**💸 قیمت**: {price_info}\n"
-                f"**📣 @PlatoDex**"
+                f"*💸 قیمت*: {price_info}\n"
+                f"*📣 @PlatoDex*"
             )
             results.append(
                 InlineQueryResultArticle(
                     id=item["id"],
                     title=item["name"],
                     description=f"{item['category']} - {price_info}",
-                    input_message_content=InputTextMessageContent(result_content, parse_mode="Markdown"),
+                    input_message_content=InputTextMessageContent(result_content, parse_mode="MarkdownV2"),
                     thumb_url=item["images"][0] if item["images"] else None
                 )
             )
@@ -318,7 +318,7 @@ async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYPE, is_group=False):
     matching_items = context.user_data["matching_items"]
-    page = context.user_data["page"]
+    page = context.user_data.get("page", 0)  # مقدار پیش‌فرض 0
     items_per_page = 10
     total_pages = (len(matching_items) + items_per_page - 1) // items_per_page
     
@@ -331,22 +331,22 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
         price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
         price_info = f"{item['price']['value']} {price_type}"
         results_text = (
-            f"**🔖 نام**: {item['name']}\n"
+            f"*🔖 نام*: {item['name']}\n"
             f"\n"
-            f"**🗃 دسته‌بندی**: {item['category']}\n"
-            f"**📃 توضیحات**: {item['description']}\n"
+            f"*🗃 دسته‌بندی*: {item['category']}\n"
+            f"*📃 توضیحات*: {item['description']}\n"
             f"\n"
-            f"**💸 قیمت**: {price_info}\n"
-            f"**📣 @PlatoDex**"
+            f"*💸 قیمت*: {price_info}\n"
+            f"*📣 @PlatoDex*"
         )
         keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         if item["images"]:
-            await update.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup, parse_mode="Markdown")
+            await update.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup, parse_mode="MarkdownV2")
         for i, audio_info in enumerate(item["audios"], 1):
             await send_audio(update, context, item, audio_info, i, reply_markup)
         if not item["images"] and not item["audios"]:
-            await update.message.reply_text(results_text, reply_markup=reply_markup, parse_mode="Markdown")
+            await update.message.reply_text(results_text, reply_markup=reply_markup, parse_mode="MarkdownV2")
         return
     
     keyboard = []
@@ -430,24 +430,24 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
     price_info = f"{item['price']['value']} {price_type}"
     results_text = (
-        f"**🔖 نام**: {item['name']}\n"
+        f"*🔖 نام*: {item['name']}\n"
         f"\n"
-        f"**🗃 دسته‌بندی**: {item['category']}\n"
-        f"**📃 توضیحات**: {item['description']}\n"
+        f"*🗃 دسته‌بندی*: {item['category']}\n"
+        f"*📃 توضیحات*: {item['description']}\n"
         f"\n"
-        f"**💸 قیمت**: {price_info}\n"
-        f"**📣 @PlatoDex**"
+        f"*💸 قیمت*: {price_info}\n"
+        f"*📣 @PlatoDex*"
     )
     
     keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     if item["images"]:
-        await query.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup, parse_mode="Markdown")
+        await query.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup, parse_mode="MarkdownV2")
     for i, audio_info in enumerate(item["audios"], 1):
         await send_audio(update, context, item, audio_info, i, reply_markup)
     if not item["images"] and not item["audios"]:
-        await query.edit_message_text(results_text, reply_markup=reply_markup, parse_mode="Markdown")
+        await query.edit_message_text(results_text, reply_markup=reply_markup, parse_mode="MarkdownV2")
     
     return SEARCH_ITEM
 
@@ -489,41 +489,44 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
     
-    item = matching_items[0]
-    price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-    price_info = f"{item['price']['value']} {price_type}"
-    results_text = (
-        f"**🔖 نام**: {item['name']}\n"
-        f"\n"
-        f"**🗃 دسته‌بندی**: {item['category']}\n"
-        f"**📃 توضیحات**: {item['description']}\n"
-        f"\n"
-        f"**💸 قیمت**: {price_info}\n"
-        f"**📣 @PlatoDex**"
-    )
-    
-    if item["images"]:
-        await update.message.reply_photo(
-            photo=item["images"][0],
-            caption=results_text,
-            reply_to_message_id=update.message.message_id,
-            message_thread_id=thread_id,
-            parse_mode="Markdown"
+    if len(matching_items) == 1:
+        item = matching_items[0]
+        price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
+        price_info = f"{item['price']['value']} {price_type}"
+        results_text = (
+            f"*🔖 نام*: {item['name']}\n"
+            f"\n"
+            f"*🗃 دسته‌بندی*: {item['category']}\n"
+            f"*📃 توضیحات*: {item['description']}\n"
+            f"\n"
+            f"*💸 قیمت*: {price_info}\n"
+            f"*📣 @PlatoDex*"
         )
+        if item["images"]:
+            await update.message.reply_photo(
+                photo=item["images"][0],
+                caption=results_text,
+                reply_to_message_id=update.message.message_id,
+                message_thread_id=thread_id,
+                parse_mode="MarkdownV2"
+            )
+        else:
+            await update.message.reply_text(
+                results_text,
+                reply_to_message_id=update.message.message_id,
+                message_thread_id=thread_id,
+                parse_mode="MarkdownV2"
+            )
+        for i, audio_info in enumerate(item["audios"], 1):
+            await send_audio(update, context, item, audio_info, i, None, thread_id)
     else:
-        await update.message.reply_text(
-            results_text,
-            reply_to_message_id=update.message.message_id,
-            message_thread_id=thread_id,
-            parse_mode="Markdown"
-        )
-    
-    for i, audio_info in enumerate(item["audios"], 1):
-        await send_audio(update, context, item, audio_info, i, None, thread_id)
+        context.user_data["matching_items"] = matching_items
+        context.user_data["page"] = 0
+        await send_paginated_items(update, context, is_group=True)
 
 async def send_paginated_categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    categories = context.user_data["categories"]
-    page = context.user_data["page"]
+    categories = context.user_data.get("categories", sorted(set(item["category"] for item in EXTRACTED_ITEMS)))
+    page = context.user_data.get("page", 0)  # مقدار پیش‌فرض 0
     items_per_page = 10
     total_pages = (len(categories) + items_per_page - 1) // items_per_page
     
@@ -578,13 +581,13 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
     price_info = f"{item['price']['value']} {price_type}"
     results_text = (
-        f"**🔖 نام**: {item['name']}\n"
+        f"*🔖 نام*: {item['name']}\n"
         f"\n"
-        f"**🗃 دسته‌بندی**: {item['category']}\n"
-        f"**📃 توضیحات**: {item['description']}\n"
+        f"*🗃 دسته‌بندی*: {item['category']}\n"
+        f"*📃 توضیحات*: {item['description']}\n"
         f"\n"
-        f"**💸 قیمت**: {price_info}\n"
-        f"**📣 @PlatoDex**"
+        f"*💸 قیمت*: {price_info}\n"
+        f"*📣 @PlatoDex*"
     )
     
     if item["images"]:
@@ -605,7 +608,7 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         animation=input_file,
                         caption=results_text,
                         message_thread_id=thread_id,
-                        parse_mode="Markdown"
+                        parse_mode="MarkdownV2"
                     )
                 except Exception as e:
                     logger.error(f"خطا در تبدیل WebP: {e}")
@@ -616,17 +619,17 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 animation=image_url,
                 caption=results_text,
                 message_thread_id=thread_id,
-                parse_mode="Markdown"
+                parse_mode="MarkdownV2"
             )
         else:
             await query.message.reply_photo(
                 photo=image_url,
                 caption=results_text,
                 message_thread_id=thread_id,
-                parse_mode="Markdown"
+                parse_mode="MarkdownV2"
             )
     else:
-        await query.edit_message_text(results_text, parse_mode="Markdown")
+        await query.edit_message_text(results_text, parse_mode="MarkdownV2")
     
     for i, audio_info in enumerate(item["audios"], 1):
         await send_audio(update, context, item, audio_info, i, None, thread_id)
@@ -635,17 +638,19 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     if "group_categories" in query.data:
+        page = context.user_data.get("page", 0)
         if "next_page" in query.data:
-            context.user_data["page"] += 1
+            context.user_data["page"] = page + 1
         elif "prev_page" in query.data:
-            context.user_data["page"] -= 1
+            context.user_data["page"] = max(0, page - 1)
         await send_paginated_categories(update, context)
     else:
         is_group = "group" in query.data
+        page = context.user_data.get("page", 0)
         if "next_page" in query.data:
-            context.user_data["page"] += 1
+            context.user_data["page"] = page + 1
         elif "prev_page" in query.data:
-            context.user_data["page"] -= 1
+            context.user_data["page"] = max(0, page - 1)
         await send_paginated_items(update, context, is_group=is_group)
     return SEARCH_ITEM if not is_group else None
 
@@ -811,7 +816,7 @@ async def main():
             application.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
             application.add_handler(InlineQueryHandler(inline_query))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
-            application.add_handler(MessageHandler(filters.Regex(r"🏷 نام :"), handle_inline_selection))
+            application.add_handler(MessageHandler(filters.Regex(r"🔖 نام"), handle_inline_selection))
             application.add_error_handler(error_handler)
             
             logger.info("در حال آماده‌سازی ربات...")

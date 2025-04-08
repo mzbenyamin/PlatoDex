@@ -55,7 +55,7 @@ SYSTEM_MESSAGE = (
     "چطور یه نفر رو فقط بلاک کنم بدون گزارش؟\\nبلاک کن و گزارش بده 'this person is spamming'\\. جریمه فقط برای محتوای مضر اعمال می‌شه\\.\\n"
     "چطور گزارش بدم بدون بلاک؟\\nبلاک و گزارش کن، بعد آنبلاک کن\\. گزارش پس گرفته نمی‌شه\\.\\n"
     "یکی تو بازی تقلب کرد، چیکار کنم؟\\nبلاک و گزارش کن 'this person is playing unfairly'\\.\\n"
-    "یکی تو ترید کلاهبرداری کرد، چیکار کنم؟\\nپلاتو فقط گیفت دادن رو ساپورت می‌کنه، ترید ریスク خودته\\. نکات: اول گیفت نده، با دوستای قابل اعتماد ترید کن، از گروه‌های مخصوص ترید استفاده کن\\.\\n"
+    "یکی تو ترید کلاهبرداری کرد، چیکار کنم؟\\nپلاتو فقط گیفت دادن رو ساپورت می‌کنه، ترید ریسک خودته\\. نکات: اول گیفت نده، با دوستای قابل اعتماد ترید کن، از گروه‌های مخصوص ترید استفاده کن\\.\\n"
     "حداقل سیستم مورد نیاز پلاتو چیه؟\\nAndroid 6\\.0 یا iOS 15\\.\\n"
     "برای چیزی که اینجا نیست چطور با پلاتو تماس بگیرم؟\\nایمیل بزن، معمولاً تو 24 ساعت (روزای کاری) جواب می‌دن\\.\\n\\n"
     "مدیریت (Moderation)\\n"
@@ -936,6 +936,8 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
                     final_response += f"\n\n{item_info}"
                     break
             
+            # قبل از ارسال، کل متن رو دوباره فرمت می‌کنیم
+            final_response = clean_text(final_response, preserve_formatting=True)
             await update.message.reply_text(
                 final_response,
                 reply_to_message_id=update.message.message_id,
@@ -1047,54 +1049,4 @@ async def main():
             image_conv_handler = ConversationHandler(
                 entry_points=[
                     CallbackQueryHandler(start_generate_image, pattern="^generate_image$"),
-                    CallbackQueryHandler(retry_generate_image, pattern="^retry_generate_image$")
-                ],
-                states={
-                    SELECT_SIZE: [CallbackQueryHandler(select_size, pattern="^size_")],
-                    GET_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_prompt)]
-                },
-                fallbacks=[
-                    CommandHandler("cancel", cancel),
-                    CommandHandler("start", start),
-                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
-                ],
-                name="image_generation",
-                persistent=False
-            )
-            
-            application.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
-            application.add_handler(CommandHandler("i", process_item_in_group, filters=filters.ChatType.GROUPS))
-            application.add_handler(CallbackQueryHandler(select_group_item, pattern="^select_group_item_"))
-            application.add_handler(CallbackQueryHandler(select_category, pattern="^select_category_"))
-            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_group"))
-            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_group_categories"))
-            application.add_handler(search_conv_handler)
-            application.add_handler(image_conv_handler)
-            application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
-            application.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
-            application.add_handler(InlineQueryHandler(inline_query))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
-            application.add_handler(MessageHandler(filters.Regex(r"🔖 نام"), handle_inline_selection))
-            application.add_error_handler(error_handler)
-            
-            logger.info("در حال آماده‌سازی ربات...")
-            await application.initialize()
-            logger.info("در حال شروع ربات...")
-            await application.start()
-            
-            config = uvicorn.Config(app, host="0.0.0.0", port=8000)
-            server = uvicorn.Server(config)
-            await server.serve()
-            
-        except Exception as e:
-            logger.error(f"خطا در تلاش {attempt + 1}/{max_retries}: {e}")
-            if attempt < max_retries - 1:
-                logger.info(f"تلاش دوباره بعد از {retry_delay} ثانیه...")
-                await asyncio.sleep(retry_delay)
-            else:
-                logger.error("همه تلاش‌ها برای شروع ربات ناموفق بود!")
-                raise
-
-if __name__ == "__main__":
-    asyncio.run(main())
+                    CallbackQueryHandler(retry_generate_image

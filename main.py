@@ -35,7 +35,7 @@ DEFAULT_CHAT_ID = 789912945
 PROCESSED_MESSAGES = set()
 PROCESSING_LOCK = Lock()
 
-# پیام سیستم با HTML و جایگزینی <br> با \n
+# پیام سیستم با HTML و \n
 SYSTEM_MESSAGE = """
 شما دستیار هوشمند PlatoDex هستید و درمورد پلاتو به کاربران کمک میکنید و به صورت خودمونی جذاب و با ایموجی 
 حرف میزنی به صورت نسل Z و کمی با طنز حرف بزن و شوخی کنه. به مشخصات آیتم‌های پلاتو دسترسی داری و می‌تونی 
@@ -115,11 +115,20 @@ SYSTEM_MESSAGE = """
 app = FastAPI()
 application = None
 
-# تابع clean_text برای HTML
+# تابع clean_text اصلاح‌شده برای حفظ تگ‌های HTML مجاز
 def clean_text(text):
     if not text:
         return ""
-    return html.escape(text)
+    # فقط کاراکترهای خاص که بخشی از تگ‌های HTML مجاز نیستند رو فرمت می‌کنیم
+    text = html.escape(text)
+    # تگ‌های مجاز رو به حالت اصلی برمی‌گردونیم
+    allowed_tags = ['b', 'i', 'u', 's', 'pre', 'code', 'a', 'ul', 'li', 'tg-spoiler', 'tg-emoji']
+    for tag in allowed_tags:
+        text = text.replace(f"&lt;{tag}&gt;", f"<{tag}>").replace(f"&lt;/{tag}&gt;", f"</{tag}>")
+        # برای تگ <a> که ممکنه href داشته باشه
+        text = re.sub(r"&lt;a href=&quot;([^&]*)&quot;&gt;", r"<a href=\"\1\">", text)
+    text = text.replace("&quot;", "\"")
+    return text
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -213,8 +222,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         AI_CHAT_USERS.remove(user_id)
     context.user_data.clear()
     user_name = update.message.from_user.first_name
-    welcome_message = clean_text(
-        f"سلام {user_name}!\nبه PlatoDex خوش اومدی - مرکز بازی‌های Plato!\n"
+    welcome_message = (
+        f"سلام {user_name}!\n"
+        "به PlatoDex خوش اومدی - مرکز بازی‌های Plato!\n"
         "<ul><li>آیتم‌ها رو ببین 🎲</li><li>رتبه‌بندی بازیکن‌ها رو چک کن 🏆</li><li>اخبار رو دنبال کن 🎯</li></ul>"
     )
     keyboard = [
@@ -225,6 +235,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     await update.message.reply_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
     return ConversationHandler.END
+
+# تابع جدید برای پاسخ به کلمات کلیدی در گروه‌ها
+async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type in ["group", "supergroup"]:
+        message_text = update.message.text.lower()
+        keywords = ["ربات", "پلاتو"]
+        if any(keyword in message_text for keyword in keywords):
+            response = (
+                "سلام رفقا! 😎 من PlatoDex هستم، دستیار خفن پلاتو!\n"
+                "هر سوالی داری بپرس، از آیتم‌ها بگیر تا ترفندای باحال! 🚀\n"
+                "اگه مشخصات کامل آیتم‌ها رو می‌خوای، تو چت خصوصی بیا و /i رو بزن!"
+            )
+            await update.message.reply_text(response, parse_mode="HTML")
 
 async def start_generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -238,7 +261,7 @@ async def start_generate_image(update: Update, context: ContextTypes.DEFAULT_TYP
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
-        clean_text("🖼️ Generate Image Mode Activated!\n\nلطفاً سایز تصویر مورد نظر خود را انتخاب کنید:"),
+        "🖼️ Generate Image Mode Activated!\n\nلطفاً سایز تصویر مورد نظر خود را انتخاب کنید:",
         reply_markup=reply_markup,
         parse_mode="HTML"
     )
@@ -260,7 +283,7 @@ async def select_size(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
-        clean_text(f"سایز تصویر انتخاب شد: {context.user_data['width']}x{context.user_data['height']}\n\nلطفاً توضیحات تصویر (پرامپت) را وارد کنید. مثلاً: 'A cat in a forest'"),
+        f"سایز تصویر انتخاب شد: {context.user_data['width']}x{context.user_data['height']}\n\nلطفاً توضیحات تصویر (پرامپت) را وارد کنید. مثلاً: 'A cat in a forest'",
         reply_markup=reply_markup,
         parse_mode="HTML"
     )
@@ -269,13 +292,13 @@ async def select_size(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = update.message.text.strip()
     if not prompt:
-        await update.message.reply_text(clean_text("لطفاً یک توضیح برای تصویر وارد کنید!"), parse_mode="HTML")
+        await update.message.reply_text("لطفاً یک توضیح برای تصویر وارد کنید!", parse_mode="HTML")
         return GET_PROMPT
     
     width = context.user_data["width"]
     height = context.user_data["height"]
     
-    loading_message = await update.message.reply_text(clean_text("🖌️ در حال طراحی عکس... لطفاً صبر کنید."), parse_mode="HTML")
+    loading_message = await update.message.reply_text("🖌️ در حال طراحی عکس... لطفاً صبر کنید.", parse_mode="HTML")
     
     api_url = f"{IMAGE_API_URL}{prompt}?width={width}&height={height}&nologo=true"
     try:
@@ -288,17 +311,17 @@ async def get_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tmp_file_path = tmp_file.name
         
         with open(tmp_file_path, 'rb') as photo:
-            await update.message.reply_photo(photo=photo, caption=clean_text(f"📸 تصویر تولید شد!\nپرامپت: {prompt}"), parse_mode="HTML")
+            await update.message.reply_photo(photo=photo, caption=f"📸 تصویر تولید شد!\nپرامپت: {prompt}", parse_mode="HTML")
         
         os.unlink(tmp_file_path)
         keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
-        await update.message.reply_text(clean_text("می‌خوای یه عکس دیگه بسازی یا بریم خونه؟"), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        await update.message.reply_text("می‌خوای یه عکس دیگه بسازی یا بریم خونه؟", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
         await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
         return ConversationHandler.END
     
     except (requests.RequestException, requests.Timeout) as e:
         logger.error(f"خطا در تولید تصویر: {e}")
-        await update.message.reply_text(clean_text("مشکلی تو تولید تصویر پیش اومد! بعداً امتحان کن."), parse_mode="HTML")
+        await update.message.reply_text("مشکلی تو تولید تصویر پیش اومد! بعداً امتحان کن.", parse_mode="HTML")
         await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
         return ConversationHandler.END
 
@@ -309,7 +332,7 @@ async def chat_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     AI_CHAT_USERS.add(user_id)
     keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
     await query.edit_message_text(
-        clean_text("🤖 چت با هوش مصنوعی فعال شد!\n\nهر چی می‌خوای بپرس، من اینجام که جواب بدم! 😎"),
+        "🤖 چت با هوش مصنوعی فعال شد!\n\nهر چی می‌خوای بپرس، من اینجام که جواب بدم! 😎",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
     )
@@ -321,10 +344,10 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     user_message = update.message.text.strip()
     if not user_message:
-        await update.message.reply_text(clean_text("چیزی بگو دیگه، ساکت نباش! 😜"), parse_mode="HTML")
+        await update.message.reply_text("چیزی بگو دیگه، ساکت نباش! 😜", parse_mode="HTML")
         return
     
-    loading_message = await update.message.reply_text(clean_text("🤔 یه لحظه صبر کن، دارم فکر می‌کنم..."), parse_mode="HTML")
+    loading_message = await update.message.reply_text("🤔 یه لحظه صبر کن، دارم فکر می‌کنم...", parse_mode="HTML")
     
     try:
         response = requests.post(TEXT_API_URL, json={"messages": [{"role": "system", "content": SYSTEM_MESSAGE}, {"role": "user", "content": user_message}]}).text
@@ -332,7 +355,7 @@ async def handle_ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"{cleaned_response}\n\nسوال دیگه داری؟ یا بیا بریم <a href='https://t.me/salatin_plato'>@salatin_plato</a> ترفندای خفن ببینیم! 🚀", parse_mode="HTML")
     except requests.RequestException as e:
         logger.error(f"خطا در چت با AI: {e}")
-        await update.message.reply_text(clean_text("مشکلی پیش اومد! بعداً امتحان کن."), parse_mode="HTML")
+        await update.message.reply_text("مشکلی پیش اومد! بعداً امتحان کن.", parse_mode="HTML")
     
     await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
 
@@ -340,13 +363,13 @@ async def search_items(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     context.user_data.clear()
-    await query.edit_message_text(clean_text("🔍 لطفاً اسم آیتم رو وارد کن یا /i رو بزن و مشخصات کامل رو ببین!"), parse_mode="HTML")
+    await query.edit_message_text("🔍 لطفاً اسم آیتم رو وارد کن یا /i رو بزن و مشخصات کامل رو ببین!", parse_mode="HTML")
     return SEARCH_ITEM
 
 async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     search_query = update.message.text.strip().lower()
     if not search_query:
-        await update.message.reply_text(clean_text("لطفاً یه اسم آیتم وارد کن!"), parse_mode="HTML")
+        await update.message.reply_text("لطفاً یه اسم آیتم وارد کن!", parse_mode="HTML")
         return SEARCH_ITEM
     
     matched_items = [item for item in EXTRACTED_ITEMS if search_query in item["name"].lower()]
@@ -354,7 +377,7 @@ async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not matched_items:
         keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
         await update.message.reply_text(
-            clean_text(f"هیچ آیتمی با اسم '{search_query}' پیدا نشد!\nدوباره امتحان کن یا برو خونه! 😛"),
+            f"هیچ آیتمی با اسم '{search_query}' پیدا نشد!\nدوباره امتحان کن یا برو خونه! 😛",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="HTML"
         )
@@ -364,7 +387,7 @@ async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE
         item = matched_items[0]
         price = item["price"]
         price_text = f"{price['value']} {price['type']}" if price["value"] > 0 else "رایگان"
-        caption = clean_text(
+        caption = (
             f"<b>اسم:</b> {item['name']}\n"
             f"<b>دسته‌بندی:</b> {item['category']}\n"
             f"<b>توضیحات:</b> {item['description']}\n"
@@ -385,7 +408,7 @@ async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE
     ]
     keyboard.append([InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")])
     await update.message.reply_text(
-        clean_text(f"چند تا آیتم با '{search_query}' پیدا شد!\nیکی رو انتخاب کن:"),
+        f"چند تا آیتم با '{search_query}' پیدا شد!\nیکی رو انتخاب کن:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML"
     )
@@ -398,12 +421,12 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     item = next((i for i in EXTRACTED_ITEMS if i["id"] == item_id), None)
     
     if not item:
-        await query.edit_message_text(clean_text("آیتم پیدا نشد! برو خونه و دوباره امتحان کن."), parse_mode="HTML")
+        await query.edit_message_text("آیتم پیدا نشد! برو خونه و دوباره امتحان کن.", parse_mode="HTML")
         return ConversationHandler.END
     
     price = item["price"]
     price_text = f"{price['value']} {price['type']}" if price["value"] > 0 else "رایگان"
-    caption = clean_text(
+    caption = (
         f"<b>اسم:</b> {item['name']}\n"
         f"<b>دسته‌بندی:</b> {item['category']}\n"
         f"<b>توضیحات:</b> {item['description']}\n"
@@ -438,12 +461,10 @@ async def inline_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
             title=item["name"],
             description=f"{item['category']} - {item['description'][:50]}...",
             input_message_content=InputTextMessageContent(
-                clean_text(
-                    f"<b>اسم:</b> {item['name']}\n"
-                    f"<b>دسته‌بندی:</b> {item['category']}\n"
-                    f"<b>توضیحات:</b> {item['description']}\n"
-                    f"<b>قیمت:</b> {item['price']['value']} {item['price']['type']}"
-                ),
+                f"<b>اسم:</b> {item['name']}\n"
+                f"<b>دسته‌بندی:</b> {item['category']}\n"
+                f"<b>توضیحات:</b> {item['description']}\n"
+                f"<b>قیمت:</b> {item['price']['value']} {item['price']['type']}",
                 parse_mode="HTML"
             ),
             thumbnail_url=item["images"][0] if item["images"] else None
@@ -460,8 +481,9 @@ async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in AI_CHAT_USERS:
         AI_CHAT_USERS.remove(user_id)
     context.user_data.clear()
-    welcome_message = clean_text(
-        f"سلام {query.from_user.first_name}!\nبه PlatoDex خوش اومدی - مرکز بازی‌های Plato!\n"
+    welcome_message = (
+        f"سلام {query.from_user.first_name}!\n"
+        "به PlatoDex خوش اومدی - مرکز بازی‌های Plato!\n"
         "<ul><li>آیتم‌ها رو ببین 🎲</li><li>رتبه‌بندی بازیکن‌ها رو چک کن 🏆</li><li>اخبار رو دنبال کن 🎯</li></ul>"
     )
     keyboard = [
@@ -495,13 +517,13 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in AI_CHAT_USERS:
         AI_CHAT_USERS.remove(user_id)
     context.user_data.clear()
-    await update.message.reply_text(clean_text("عملیات لغو شد!\nبرگشتی به خونه! 🏠"), parse_mode="HTML")
+    await update.message.reply_text("عملیات لغو شد!\nبرگشتی به خونه! 🏠", parse_mode="HTML")
     return ConversationHandler.END
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"خطا رخ داد: {context.error}")
     if update and hasattr(update, 'effective_message'):
-        await update.effective_message.reply_text(clean_text("یه مشکلی پیش اومد! بعداً امتحان کن."), parse_mode="HTML")
+        await update.effective_message.reply_text("یه مشکلی پیش اومد! بعداً امتحان کن.", parse_mode="HTML")
 
 async def setup_application():
     global application
@@ -531,6 +553,7 @@ async def setup_application():
     application.add_handler(conv_handler_image)
     application.add_handler(CallbackQueryHandler(button))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_chat))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_message))  # هندلر جدید برای گروه‌ها
     application.add_handler(InlineQueryHandler(inline_search))
     application.add_error_handler(error_handler)
 

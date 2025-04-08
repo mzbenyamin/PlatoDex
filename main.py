@@ -55,7 +55,7 @@ SYSTEM_MESSAGE = (
     "چطور یه نفر رو فقط بلاک کنم بدون گزارش؟\\nبلاک کن و گزارش بده 'this person is spamming'\\. جریمه فقط برای محتوای مضر اعمال می‌شه\\.\\n"
     "چطور گزارش بدم بدون بلاک؟\\nبلاک و گزارش کن، بعد آنبلاک کن\\. گزارش پس گرفته نمی‌شه\\.\\n"
     "یکی تو بازی تقلب کرد، چیکار کنم؟\\nبلاک و گزارش کن 'this person is playing unfairly'\\.\\n"
-    "یکی تو ترید کلاهبرداری کرد، چیکار کنم؟\\nپلاتو فقط گیفت دادن رو ساپورت می‌کنه، ترید ریسک خودته\\. نکات: اول گیفت نده، با دوستای قابل اعتماد ترید کن، از گروه‌های مخصوص ترید استفاده کن\\.\\n"
+    "یکی تو ترید کلاهبرداری کرد، چیکار کنم؟\\nپلاتو فقط گیفت دادن رو ساپورت می‌کنه، ترید ریスク خودته\\. نکات: اول گیفت نده، با دوستای قابل اعتماد ترید کن، از گروه‌های مخصوص ترید استفاده کن\\.\\n"
     "حداقل سیستم مورد نیاز پلاتو چیه؟\\nAndroid 6\\.0 یا iOS 15\\.\\n"
     "برای چیزی که اینجا نیست چطور با پلاتو تماس بگیرم؟\\nایمیل بزن، معمولاً تو 24 ساعت (روزای کاری) جواب می‌دن\\.\\n\\n"
     "مدیریت (Moderation)\\n"
@@ -135,11 +135,17 @@ async def webhook(request: Request):
 async def root():
     return {"message": "PlatoDex Bot is running!"}
 
-def clean_text(text):
+def clean_text(text, preserve_formatting=False):
     if not text:
         return ""
-    reserved_chars = r"([_*[\]()~`>#+\-=|{}.!])"
-    return re.sub(reserved_chars, r"\\\1", text)
+    if preserve_formatting:
+        # فقط کاراکترهایی که برای فرمت Markdown استفاده نمی‌شن رو فرار کن
+        reserved_chars = r"([[\]()~`>#+\-=|{}.!])"
+        return re.sub(reserved_chars, r"\\\1", text)
+    else:
+        # همه کاراکترهای رزرو شده رو فرار کن
+        reserved_chars = r"([_*[\]()~`>#+\-=|{}.!])"
+        return re.sub(reserved_chars, r"\\\1", text)
 
 async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
     global EXTRACTED_ITEMS
@@ -156,7 +162,7 @@ async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
             if not script_tag:
                 logger.error("داده‌های آیتم‌ها پیدا نشد!")
                 if context and hasattr(context.bot, 'send_message'):
-                    await context.bot.send_message(chat_id=DEFAULT_CHAT_ID, text=clean_text("مشکلی تو بارگذاری آیتم‌ها پیش اومد!"))
+                    await context.bot.send_message(chat_id=DEFAULT_CHAT_ID, text=clean_text("مشکلی تو بارگذاری آیتم‌ها پیش اومد!", preserve_formatting=True))
                 return
             items_data = json.loads(re.search(r"var items = ({.*?});", script_tag.string, re.DOTALL).group(1))
             table = soup.find("table", id="tool_items_table_default")
@@ -180,16 +186,16 @@ async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
                 if columns:
                     EXTRACTED_ITEMS.append({
                         "id": item_id,
-                        "name": clean_text(columns.get("column_3", "Unknown Item")),
-                        "category": clean_text(columns.get("column_2", "Unknown")),
-                        "description": clean_text(columns.get("column_5", "No description available")),
+                        "name": clean_text(columns.get("column_3", "Unknown Item"), preserve_formatting=True),
+                        "category": clean_text(columns.get("column_2", "Unknown"), preserve_formatting=True),
+                        "description": clean_text(columns.get("column_5", "No description available"), preserve_formatting=True),
                         "price": details.get("price", {"value": 0, "type": "unknown"}),
                         "images": images,
                         "audios": audios
                     })
             logger.info(f"تعداد آیتم‌ها: {len(EXTRACTED_ITEMS)}")
             if context and hasattr(context.bot, 'send_message'):
-                await context.bot.send_message(chat_id=DEFAULT_CHAT_ID, text=clean_text(f"آیتم‌ها به‌روز شدند! تعداد: {len(EXTRACTED_ITEMS)}"), parse_mode="MarkdownV2")
+                await context.bot.send_message(chat_id=DEFAULT_CHAT_ID, text=clean_text(f"آیتم‌ها به‌روز شدند! تعداد: {len(EXTRACTED_ITEMS)}", preserve_formatting=True), parse_mode="MarkdownV2")
             return
         except (requests.RequestException, requests.Timeout) as e:
             logger.error(f"خطا در تلاش {attempt + 1}/{max_retries}: {e}")
@@ -199,7 +205,7 @@ async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
             else:
                 logger.error("همه تلاش‌ها ناموفق بود!")
                 if context and hasattr(context.bot, 'send_message'):
-                    await context.bot.send_message(chat_id=DEFAULT_CHAT_ID, text=clean_text("خطا در به‌روزرسانی آیتم‌ها! بعداً امتحان کنید."), parse_mode="MarkdownV2")
+                    await context.bot.send_message(chat_id=DEFAULT_CHAT_ID, text=clean_text("خطا در به‌روزرسانی آیتم‌ها! بعداً امتحان کنید.", preserve_formatting=True), parse_mode="MarkdownV2")
                 return
 
 def schedule_scraping(app: Application):
@@ -216,7 +222,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.message.from_user.first_name
     welcome_message = clean_text(
         f"سلام {user_name}!\nبه PlatoDex خوش اومدی - مرکز بازی‌های Plato!\n"
-        "• آیتم‌ها رو ببین 🎲\n• رتبه‌بندی بازیکن‌ها رو چک کن 🏆\n• اخبار رو دنبال کن 🎯"
+        "• آیتم‌ها رو ببین 🎲\n• رتبه‌بندی بازیکن‌ها رو چک کن 🏆\n• اخبار رو دنبال کن 🎯",
+        preserve_formatting=True
     )
     keyboard = [
         [InlineKeyboardButton("Run App 📱", web_app={"url": "https://platodex-tde3qe.vercel.app/"})],
@@ -239,7 +246,7 @@ async def start_generate_image(update: Update, context: ContextTypes.DEFAULT_TYP
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
-        clean_text("🖼️ Generate Image Mode Activated!\n\nلطفاً سایز تصویر مورد نظر خود را انتخاب کنید:"),
+        clean_text("🖼️ Generate Image Mode Activated!\n\nلطفاً سایز تصویر مورد نظر خود را انتخاب کنید:", preserve_formatting=True),
         reply_markup=reply_markup,
         parse_mode="MarkdownV2"
     )
@@ -261,7 +268,7 @@ async def select_size(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
-        clean_text(f"سایز تصویر انتخاب شد: {context.user_data['width']}x{context.user_data['height']}\n\nلطفاً توضیحات تصویر (پرامپت) را وارد کنید. مثلاً: 'A cat in a forest'"),
+        clean_text(f"سایز تصویر انتخاب شد: {context.user_data['width']}x{context.user_data['height']}\n\nلطفاً توضیحات تصویر (پرامپت) را وارد کنید\. مثلاً: 'A cat in a forest'", preserve_formatting=True),
         reply_markup=reply_markup,
         parse_mode="MarkdownV2"
     )
@@ -270,13 +277,13 @@ async def select_size(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = update.message.text.strip()
     if not prompt:
-        await update.message.reply_text(clean_text("لطفاً یک توضیح برای تصویر وارد کنید!"), parse_mode="MarkdownV2")
+        await update.message.reply_text(clean_text("لطفاً یک توضیح برای تصویر وارد کنید!", preserve_formatting=True), parse_mode="MarkdownV2")
         return GET_PROMPT
     
     width = context.user_data["width"]
     height = context.user_data["height"]
     
-    loading_message = await update.message.reply_text(clean_text("🖌️ در حال طراحی عکس... لطفاً صبر کنید."), parse_mode="MarkdownV2")
+    loading_message = await update.message.reply_text(clean_text("🖌️ در حال طراحی عکس\.\.\. لطفاً صبر کنید\.", preserve_formatting=True), parse_mode="MarkdownV2")
     
     api_url = f"{IMAGE_API_URL}{prompt}?width={width}&height={height}&nologo=true"
     try:
@@ -291,10 +298,10 @@ async def get_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_photo(photo=response.content, reply_markup=reply_markup)
         else:
             await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
-            await update.message.reply_text(clean_text("مشکلی در تولید تصویر پیش آمد. لطفاً دوباره امتحان کنید."), parse_mode="MarkdownV2")
+            await update.message.reply_text(clean_text("مشکلی در تولید تصویر پیش آمد\. لطفاً دوباره امتحان کنید\.", preserve_formatting=True), parse_mode="MarkdownV2")
     except Exception as e:
         await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
-        await update.message.reply_text(clean_text("خطایی رخ داد. لطفاً بعداً امتحان کنید."), parse_mode="MarkdownV2")
+        await update.message.reply_text(clean_text("خطایی رخ داد\. لطفاً بعداً امتحان کنید\.", preserve_formatting=True), parse_mode="MarkdownV2")
         logger.error(f"خطا در تولید تصویر: {e}")
     
     return ConversationHandler.END
@@ -310,7 +317,7 @@ async def retry_generate_image(update: Update, context: ContextTypes.DEFAULT_TYP
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
-        clean_text("🖼️ Generate Image Mode Activated!\n\nلطفاً سایز تصویر مورد نظر خود را انتخاب کنید:"),
+        clean_text("🖼️ Generate Image Mode Activated!\n\nلطفاً سایز تصویر مورد نظر خود را انتخاب کنید:", preserve_formatting=True),
         reply_markup=reply_markup,
         parse_mode="MarkdownV2"
     )
@@ -325,7 +332,7 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for item in EXTRACTED_ITEMS:
         if query.lower() in item["name"].lower() or query.lower() in item["category"].lower():
             price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-            price_info = clean_text(f"{item['price']['value']} {price_type}")
+            price_info = clean_text(f"{item['price']['value']} {price_type}", preserve_formatting=True)
             result_content = (
                 f"*🔖 نام*: {item['name']}\n"
                 f"\n"
@@ -354,7 +361,7 @@ async def handle_inline_selection(update: Update, context: ContextTypes.DEFAULT_
     
     thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
     price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-    price_info = clean_text(f"{item['price']['value']} {price_type}")
+    price_info = clean_text(f"{item['price']['value']} {price_type}", preserve_formatting=True)
     results_text = (
         f"*🔖 نام*: {item['name']}\n"
         f"\n"
@@ -395,7 +402,7 @@ async def start_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
-        clean_text("🔍 می‌خوای آیتم‌ها رو چطوری پیدا کنی؟\nیا از دسته‌بندی‌ها انتخاب کن یا اسم آیتم رو بفرست!"),
+        clean_text("🔍 می‌خوای آیتم‌ها رو چطوری پیدا کنی؟\nیا از دسته‌بندی‌ها انتخاب کن یا اسم آیتم رو بفرست!", preserve_formatting=True),
         reply_markup=reply_markup,
         parse_mode="MarkdownV2"
     )
@@ -408,7 +415,7 @@ async def search_by_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
-        clean_text("🔍 لطفاً اسم آیتم رو بفرست!"),
+        clean_text("🔍 لطفاً اسم آیتم رو بفرست!", preserve_formatting=True),
         reply_markup=reply_markup,
         parse_mode="MarkdownV2"
     )
@@ -427,7 +434,7 @@ async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     if not matching_items:
         keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
-        await update.message.reply_text(clean_text("هیچ آیتمی پیدا نشد! 😕"), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="MarkdownV2")
+        await update.message.reply_text(clean_text("هیچ آیتمی پیدا نشد! 😕", preserve_formatting=True), reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="MarkdownV2")
         return SEARCH_ITEM
     
     context.user_data["matching_items"] = matching_items
@@ -448,7 +455,7 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
     if len(matching_items) == 1 and not is_group:
         item = matching_items[0]
         price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-        price_info = clean_text(f"{item['price']['value']} {price_type}")
+        price_info = clean_text(f"{item['price']['value']} {price_type}", preserve_formatting=True)
         results_text = (
             f"*🔖 نام*: {item['name']}\n"
             f"\n"
@@ -471,8 +478,8 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
     keyboard = []
     for i, item in enumerate(current_items, start_idx + 1):
         price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-        price_info = clean_text(f"{item['price']['value']} {price_type}")
-        button_text = clean_text(f"{i}. {item['name']} - {price_info}")
+        price_info = clean_text(f"{item['price']['value']} {price_type}", preserve_formatting=True)
+        button_text = clean_text(f"{i}\. {item['name']} - {price_info}", preserve_formatting=True)
         callback_data = f"select{'_group' if is_group else ''}_item_{item['id']}"
         keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
     
@@ -487,7 +494,7 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
         keyboard.append([InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
-    message_text = clean_text(f"این آیتم‌ها رو پیدا کردم (صفحه {page + 1} از {total_pages})، کدوم رو می‌خوای؟ 👇")
+    message_text = clean_text(f"این آیتم‌ها رو پیدا کردم (صفحه {page + 1} از {total_pages})، کدوم رو می‌خوای؟ 👇", preserve_formatting=True)
     
     if is_group and update.message:
         thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
@@ -519,7 +526,7 @@ async def send_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, item, a
                     await context.bot.send_voice(
                         chat_id=message.chat_id,
                         voice=voice_file,
-                        caption=clean_text(audio_type),
+                        caption=clean_text(audio_type, preserve_formatting=True),
                         message_thread_id=thread_id,
                         reply_markup=reply_markup
                     )
@@ -527,16 +534,16 @@ async def send_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, item, a
                     await context.bot.send_voice(
                         chat_id=message.chat_id,
                         voice=voice_file,
-                        caption=clean_text(audio_type),
+                        caption=clean_text(audio_type, preserve_formatting=True),
                         reply_markup=reply_markup
                     )
             os.remove(temp_file_path)
     except Exception as e:
         logger.error(f"خطا در دانلود یا ارسال وویس {index}: {e}")
         if thread_id:
-            await message.reply_text(clean_text(f"مشکلی توی ارسال وویس {index} پیش اومد! 😅"), message_thread_id=thread_id, parse_mode="MarkdownV2")
+            await message.reply_text(clean_text(f"مشکلی توی ارسال وویس {index} پیش اومد! 😅", preserve_formatting=True), message_thread_id=thread_id, parse_mode="MarkdownV2")
         else:
-            await message.reply_text(clean_text(f"مشکلی توی ارسال وویس {index} پیش اومد! 😅"), parse_mode="MarkdownV2")
+            await message.reply_text(clean_text(f"مشکلی توی ارسال وویس {index} پیش اومد! 😅", preserve_formatting=True), parse_mode="MarkdownV2")
 
 async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -545,11 +552,11 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     item = next((i for i in EXTRACTED_ITEMS if i["id"] == item_id), None)
     
     if not item:
-        await query.edit_message_text(clean_text("آیتم پیدا نشد! 😕"), parse_mode="MarkdownV2")
+        await query.edit_message_text(clean_text("آیتم پیدا نشد! 😕", preserve_formatting=True), parse_mode="MarkdownV2")
         return SEARCH_ITEM
     
     price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-    price_info = clean_text(f"{item['price']['value']} {price_type}")
+    price_info = clean_text(f"{item['price']['value']} {price_type}", preserve_formatting=True)
     results_text = (
         f"*🔖 نام*: {item['name']}\n"
         f"\n"
@@ -596,9 +603,9 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
     except Exception as e:
         logger.error(f"خطا در دسترسی به چت {chat_id}: {e}")
         if "Forbidden" in str(e):
-            await update.message.reply_text(clean_text("متأسفم، من از این گروه بیرون انداخته شدم! 😕 دوباره منو اد کن تا کمکت کنم."), parse_mode="MarkdownV2")
+            await update.message.reply_text(clean_text("متأسفم، من از این گروه بیرون انداخته شدم! 😕 دوباره منو اد کن تا کمکت کنم\.", preserve_formatting=True), parse_mode="MarkdownV2")
         else:
-            await update.message.reply_text(clean_text("یه مشکلی پیش اومد، نمی‌تونم چت رو پیدا کنم! 😅"), parse_mode="MarkdownV2")
+            await update.message.reply_text(clean_text("یه مشکلی پیش اومد، نمی‌تونم چت رو پیدا کنم! 😅", preserve_formatting=True), parse_mode="MarkdownV2")
         return
     
     thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
@@ -615,7 +622,7 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
     
     if not matching_items:
         await update.message.reply_text(
-            clean_text(f"متأسفم، آیتمی با اسم '{item_name}' پیدا نشد! 😕"),
+            clean_text(f"متأسفم، آیتمی با اسم '{item_name}' پیدا نشد! 😕", preserve_formatting=True),
             message_thread_id=thread_id,
             parse_mode="MarkdownV2"
         )
@@ -624,7 +631,7 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
     if len(matching_items) == 1:
         item = matching_items[0]
         price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-        price_info = clean_text(f"{item['price']['value']} {price_type}")
+        price_info = clean_text(f"{item['price']['value']} {price_type}", preserve_formatting=True)
         results_text = (
             f"*🔖 نام*: {item['name']}\n"
             f"\n"
@@ -669,7 +676,7 @@ async def send_paginated_categories(update: Update, context: ContextTypes.DEFAUL
     keyboard = []
     for i, category in enumerate(current_categories, start_idx + 1):
         callback_data = f"select_category_{category}"
-        keyboard.append([InlineKeyboardButton(clean_text(f"{i}. {category}"), callback_data=callback_data)])
+        keyboard.append([InlineKeyboardButton(clean_text(f"{i}\. {category}", preserve_formatting=True), callback_data=callback_data)])
     
     nav_buttons = []
     if page > 0:
@@ -682,7 +689,7 @@ async def send_paginated_categories(update: Update, context: ContextTypes.DEFAUL
         keyboard.append([InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
-    message_text = clean_text(f"دسته‌بندی‌ها (صفحه {page + 1} از {total_pages})، کدوم رو می‌خوای؟ 👇")
+    message_text = clean_text(f"دسته‌بندی‌ها (صفحه {page + 1} از {total_pages})، کدوم رو می‌خوای؟ 👇", preserve_formatting=True)
     
     if is_group and update.message:
         thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
@@ -699,7 +706,7 @@ async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     matching_items = [item for item in EXTRACTED_ITEMS if item["category"] == category]
     
     if not matching_items:
-        await query.edit_message_text(clean_text(f"هیچ آیتمی تو دسته‌بندی '{category}' پیدا نشد! 😕"), parse_mode="MarkdownV2")
+        await query.edit_message_text(clean_text(f"هیچ آیتمی تو دسته‌بندی '{category}' پیدا نشد! 😕", preserve_formatting=True), parse_mode="MarkdownV2")
         return SELECT_CATEGORY
     
     context.user_data["matching_items"] = matching_items
@@ -715,11 +722,11 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     thread_id = query.message.message_thread_id if hasattr(query.message, 'is_topic_message') and query.message.is_topic_message else None
     
     if not item:
-        await query.edit_message_text(clean_text("آیتم پیدا نشد! 😕"), parse_mode="MarkdownV2")
+        await query.edit_message_text(clean_text("آیتم پیدا نشد! 😕", preserve_formatting=True), parse_mode="MarkdownV2")
         return
     
     price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-    price_info = clean_text(f"{item['price']['value']} {price_type}")
+    price_info = clean_text(f"{item['price']['value']} {price_type}", preserve_formatting=True)
     results_text = (
         f"*🔖 نام*: {item['name']}\n"
         f"\n"
@@ -754,7 +761,7 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await send_audio(update, context, item, audio_info, i, None, thread_id)
                 except Exception as e:
                     logger.error(f"خطا در تبدیل WebP: {e}")
-                    await query.message.reply_text(clean_text("مشکلی توی ارسال عکس پیش اومد! 😅"), message_thread_id=thread_id, parse_mode="MarkdownV2")
+                    await query.message.reply_text(clean_text("مشکلی توی ارسال عکس پیش اومد! 😅", preserve_formatting=True), message_thread_id=thread_id, parse_mode="MarkdownV2")
             asyncio.create_task(process_webp())
         elif image_url.lower().endswith('.gif'):
             await query.message.reply_animation(
@@ -811,7 +818,7 @@ async def chat_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
-        clean_text("🤖 چت با هوش مصنوعی فعال شد!\n\nهر چی می‌خوای بگو، من یادم می‌مونه چی گفتی! 😎"),
+        clean_text("🤖 چت با هوش مصنوعی فعال شد!\n\nهر چی می‌خوای بگو، من یادم می‌مونه چی گفتی! 😎", preserve_formatting=True),
         reply_markup=reply_markup,
         parse_mode="MarkdownV2"
     )
@@ -842,20 +849,20 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         response = requests.post(TEXT_API_URL, json=payload, timeout=10)
         if response.status_code == 200:
-            ai_response = clean_text(response.text.strip())
+            ai_response = clean_text(response.text.strip(), preserve_formatting=True)
             chat_history.append({"role": "assistant", "content": ai_response})
             context.user_data["chat_history"] = chat_history
             await update.message.reply_text(ai_response, reply_markup=reply_markup, parse_mode="MarkdownV2")
         else:
             await update.message.reply_text(
-                clean_text("اوفف، یه مشکلی پیش اومد! 😅 فکر کنم API یه کم خوابش برده! بعداً امتحان کن 🚀"),
+                clean_text("اوفف، یه مشکلی پیش اومد! 😅 فکر کنم API یه کم خوابش برده! بعداً امتحان کن 🚀", preserve_formatting=True),
                 reply_markup=reply_markup,
                 parse_mode="MarkdownV2"
             )
     except Exception as e:
         logger.error(f"خطا در اتصال به API چت: {e}")
         await update.message.reply_text(
-            clean_text("اییی، یه خطا خوردم! 😭 بعداً دوباره بیا، قول می‌دم درستش کنم! 🚀"),
+            clean_text("اییی، یه خطا خوردم! 😭 بعداً دوباره بیا! 🚀", preserve_formatting=True),
             reply_markup=reply_markup,
             parse_mode="MarkdownV2"
         )
@@ -893,7 +900,6 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     if not should_reply:
         return
     
-    # اگه ریپلای به پیام رباته، متن پیام ریپلای‌شده رو هم اضافه کنیم
     if replied_message and replied_message.from_user.id == context.bot.id:
         user_history.append({"role": "assistant", "content": replied_message.text})
     
@@ -912,21 +918,20 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     try:
         response = requests.post(TEXT_API_URL, json=payload, timeout=10)
         if response.status_code == 200:
-            ai_response = clean_text(response.text.strip())  # فرمت کردن پاسخ API
+            ai_response = clean_text(response.text.strip(), preserve_formatting=True)
             user_history.append({"role": "assistant", "content": ai_response})
             context.user_data["group_chat_history"] = user_history
             
-            # چک کردن سوال در مورد آیتم‌ها
             final_response = ai_response
             for item in EXTRACTED_ITEMS:
                 if item["name"].lower() in user_message:
                     price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-                    price_info = clean_text(f"{item['price']['value']} {price_type}")
-                    item_info = clean_text(
-                        f"مشخصات آیتم پیدا شد! 🎉\n"
-                        f"*🔖 نام*: {item['name']}\n"
+                    price_info = clean_text(f"{item['price']['value']} {price_type}", preserve_formatting=True)
+                    item_info = (
+                        "مشخصات آیتم پیدا شد! 🎉\n"
+                        f"*🔖 نام*: {clean_text(item['name'], preserve_formatting=True)}\n"
                         f"*💸 قیمت*: {price_info}\n"
-                        f"اگه می‌خوای مشخصات کامل‌تر با صدا رو ببینی، کافیه بگی: `/i {item['name']}` 😎"
+                        f"اگه می‌خوای مشخصات کامل‌تر با صدا رو ببینی، کافیه بگی: `/i {clean_text(item['name'], preserve_formatting=True)}` 😎"
                     )
                     final_response += f"\n\n{item_info}"
                     break
@@ -938,7 +943,7 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
                 parse_mode="MarkdownV2"
             )
         else:
-            error_message = clean_text("اوفف، یه مشکلی پیش اومد! 😅 بعداً امتحان کن 🚀")
+            error_message = clean_text("اوفف، یه مشکلی پیش اومد! 😅 بعداً امتحان کن 🚀", preserve_formatting=True)
             await update.message.reply_text(
                 error_message,
                 reply_to_message_id=update.message.message_id,
@@ -946,8 +951,9 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
                 parse_mode="MarkdownV2"
             )
     except Exception as e:
-        logger.error(f"خطا در اتصال به API چت گروه: {e}")
-        error_message = clean_text("اییی، یه خطا خوردم! 😭 بعداً دوباره بیا 🚀")
+        formatted_error = clean_text(str(e), preserve_formatting=True)
+        logger.error(f"خطا در اتصال به API چت گروه: {formatted_error}")
+        error_message = clean_text("اییی، یه خطا خوردم! 😭 بعداً دوباره بیا 🚀", preserve_formatting=True)
         await update.message.reply_text(
             error_message,
             reply_to_message_id=update.message.message_id,
@@ -965,7 +971,8 @@ async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = query.from_user.first_name
     welcome_message = clean_text(
         f"سلام {user_name}!\nبه PlatoDex خوش اومدی - مرکز بازی‌های Plato!\n"
-        "• آیتم‌ها رو ببین 🎲\n• رتبه‌بندی بازیکن‌ها رو چک کن 🏆\n• اخبار رو دنبال کن 🎯"
+        "• آیتم‌ها رو ببین 🎲\n• رتبه‌بندی بازیکن‌ها رو چک کن 🏆\n• اخبار رو دنبال کن 🎯",
+        preserve_formatting=True
     )
     keyboard = [
         [InlineKeyboardButton("Run App 📱", web_app={"url": "https://platodex-tde3qe.vercel.app/"})],
@@ -985,7 +992,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in AI_CHAT_USERS:
         AI_CHAT_USERS.remove(user_id)
-    await update.message.reply_text(clean_text("عملیات لغو شد."), reply_markup=InlineKeyboardMarkup([]), parse_mode="MarkdownV2")
+    await update.message.reply_text(clean_text("عملیات لغو شد\.", preserve_formatting=True), reply_markup=InlineKeyboardMarkup([]), parse_mode="MarkdownV2")
     await start(update, context)
     return ConversationHandler.END
 
@@ -993,7 +1000,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"خطا رخ داد: {context.error}")
     if str(context.error) == "Query is too old and response timeout expired or query id is invalid":
         if update and update.callback_query:
-            await update.callback_query.message.reply_text(clean_text("اوپس، یه کم دیر شد! دوباره امتحان کن 😅"), parse_mode="MarkdownV2")
+            await update.callback_query.message.reply_text(clean_text("اوپس، یه کم دیر شد! دوباره امتحان کن 😅", preserve_formatting=True), parse_mode="MarkdownV2")
 
 async def main():
     global application

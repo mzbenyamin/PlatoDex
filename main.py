@@ -139,7 +139,7 @@ def clean_text(text):
     if not text:
         return ""
     # حذف کاراکترهای خاص
-    text = text.replace("*", "").replace("_", "").replace("`", "").replace("[", "").replace("]", "").replace("!", "!")
+    text = text.replace("*", "").replace("`", "").replace("[", "").replace("]", "").replace("!", "!")
     # متن‌های تبلیغاتی Pollinations.AI
     ad_texts = [
         "Powered by Pollinations.AI free text APIs. Support our mission(https://pollinations.ai/redirect/kofi) to keep AI accessible for everyone.",

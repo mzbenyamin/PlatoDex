@@ -1049,4 +1049,48 @@ async def main():
             image_conv_handler = ConversationHandler(
                 entry_points=[
                     CallbackQueryHandler(start_generate_image, pattern="^generate_image$"),
+                    CallbackQueryHandler(retry_generate_image, pattern="^retry_generate_image$")
+                ],
+                states={
+                    SELECT_SIZE: [CallbackQueryHandler(select_size, pattern="^size_")],
+                    GET_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_prompt)]
+                },
+                fallbacks=[
+                    CommandHandler("cancel", cancel),
+                    CommandHandler("start", start),
+                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
+                ],
+                name="image_generation",
+                persistent=False
+            )
+            
+            application.add_handler(CommandHandler("start", start))
+            application.add_handler(search_conv_handler)
+            application.add_handler(image_conv_handler)
+            application.add_handler(InlineQueryHandler(inline_query))
+            application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"@PlatoDex"), handle_inline_selection))
+            application.add_handler(CommandHandler("i", process_item_in_group))
+            application.add_handler(CallbackQueryHandler(select_group_item, pattern="^select_group_item_"))
+            application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
+            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_group"))
+            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_group_categories"))
+            application.add_error_handler(error_handler)
+            
+            logger.info("هندلرها اضافه شدند، در انتظار درخواست‌ها...")
+            break
+        except Exception as e:
+            logger.error(f"خطا در تلاش {attempt + 1}/{max_retries} برای راه‌اندازی: {e}")
+            if attempt < max_retries - 1:
+                logger.info(f"تلاش دوباره بعد از {retry_delay} ثانیه...")
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.error("همه تلاش‌ها ناموفق بود! خروج...")
+                return
+    
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+            image_conv_handler = ConversationHandler(
+                entry_points=[
+                    CallbackQueryHandler(start_generate_image, pattern="^generate_image$"),
                     CallbackQueryHandler(retry_generate_image)

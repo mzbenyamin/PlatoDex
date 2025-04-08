@@ -140,10 +140,15 @@ def clean_text(text):
         return ""
     # حذف کاراکترهای خاص
     text = text.replace("*", "").replace("_", "").replace("`", "").replace("[", "").replace("]", "").replace("!", "!")
-    # حذف متن تبلیغاتی Pollinations.AI
-    ad_text = "Powered by Pollinations.AI free text APIs. Support our mission(https://pollinations.ai/redirect/kofi) to keep AI accessible for everyone."
-    if ad_text in text:
-        text = text.replace(ad_text, "").strip()
+    # متن‌های تبلیغاتی Pollinations.AI
+    ad_texts = [
+        "Powered by Pollinations.AI free text APIs. Support our mission(https://pollinations.ai/redirect/kofi) to keep AI accessible for everyone.",
+        "توسط Pollinations.AI به صورت رایگان ارائه شده است. از مأموریت ما حمایت کنید(https://pollinations.ai/redirect/kofi) تا AI برای همه قابل دسترسی باشد."
+    ]
+    # حذف هر کدوم از متن‌های تبلیغاتی که تو متن باشه
+    for ad_text in ad_texts:
+        if ad_text in text:
+            text = text.replace(ad_text, "").strip()
     return text
 
 async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):

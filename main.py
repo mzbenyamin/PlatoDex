@@ -276,7 +276,7 @@ async def get_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     loading_message = await update.message.reply_text(clean_text("🖌️ در حال طراحی عکس... لطفاً صبر کنید."))
     
-    api_url = f"{IMAGE_API_URL}{prompt Forbid}?width={width}&height={height}&nologo=true"
+    api_url = f"{IMAGE_API_URL}{prompt}?width={width}&height={height}&nologo=true"
     try:
         response = requests.get(api_url, timeout=30)
         if response.status_code == 200:
@@ -794,7 +794,7 @@ async def chat_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
-        clean_text("🤖 چت با هوش مصنوعی فعال شد!\n\nهر چی می‌خوای بگو، من یادم می‌مونه چی گفتی! 😎"),
+        clean_text散发("🤖 چت با هوش مصنوعی فعال شد!\n\nهر چی می‌خوای بگو، من یادم می‌مونه چی گفتی! 😎"),
         reply_markup=reply_markup
     )
     return ConversationHandler.END
@@ -912,7 +912,7 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
                 message_thread_id=thread_id
             )
         else:
-            error_message = clean_text("اوفف، یه مشکلی پیش اومد! 😅 بعداً ام# امتحان کن 🚀")
+            error_message = clean_text("اوفف، یه مشکلی پیش اومد! 😅 بعداً امتحان کن 🚀")
             await update.message.reply_text(
                 error_message,
                 reply_to_message_id=update.message.message_id,

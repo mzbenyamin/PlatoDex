@@ -1076,7 +1076,7 @@ async def main():
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
             application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_group"))
             application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_group_categories"))
-            application.add_error_handler(error_handler)
+            application.add_handler(error_handler)
             
             logger.info("هندلرها اضافه شدند، در انتظار درخواست‌ها...")
             break
@@ -1090,7 +1090,3 @@ async def main():
                 return
     
     uvicorn.run(app, host="0.0.0.0", port=8000)
-            image_conv_handler = ConversationHandler(
-                entry_points=[
-                    CallbackQueryHandler(start_generate_image, pattern="^generate_image$"),
-                    CallbackQueryHandler(retry_generate_image)

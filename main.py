@@ -893,7 +893,7 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     try:
         response = requests.post(TEXT_API_URL, json=payload, timeout=10)
         if response.status_code == 200:
-            ai_response = clean_text(response.text.strip())
+            ai_response = clean_text(response.text.strip())  # استفاده از تابع clean_text اصلاح‌شده
             user_history.append({"role": "assistant", "content": ai_response})
             context.user_data["group_chat_history"] = user_history
             
@@ -931,7 +931,7 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
             reply_to_message_id=update.message.message_id,
             message_thread_id=thread_id
         )
-
+        
 async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()

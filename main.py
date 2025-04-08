@@ -138,8 +138,13 @@ async def root():
 def clean_text(text):
     if not text:
         return ""
-    # حذف یا جایگزینی کاراکترهای خاص برای متن ساده
-    return text.replace("*", "").replace("_", "").replace("`", "").replace("[", "").replace("]", "").replace("!", "!")
+    # حذف کاراکترهای خاص
+    text = text.replace("*", "").replace("_", "").replace("`", "").replace("[", "").replace("]", "").replace("!", "!")
+    # حذف متن تبلیغاتی Pollinations.AI
+    ad_text = "Powered by Pollinations.AI free text APIs. Support our mission(https://pollinations.ai/redirect/kofi) to keep AI accessible for everyone."
+    if ad_text in text:
+        text = text.replace(ad_text, "").strip()
+    return text
 
 async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
     global EXTRACTED_ITEMS
@@ -824,7 +829,7 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         response = requests.post(TEXT_API_URL, json=payload, timeout=10)
         if response.status_code == 200:
-            ai_response = clean_text(response.text.strip())
+            ai_response = clean_text(response.text.strip())  # استفاده از تابع clean_text اصلاح‌شده
             chat_history.append({"role": "assistant", "content": ai_response})
             context.user_data["chat_history"] = chat_history
             await update.message.reply_text(ai_response, reply_markup=reply_markup)

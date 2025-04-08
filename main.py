@@ -112,9 +112,8 @@ SYSTEM_MESSAGE = """
 ترفندای بیشتر تو <a href='https://t.me/salatin_plato'>@salatin_plato</a> منتظرته! 😎
 """
 
-application = None
-
 app = FastAPI()
+application = None
 
 # تابع clean_text برای HTML
 def clean_text(text):
@@ -134,7 +133,7 @@ async def webhook(request: Request):
             logger.warning(f"درخواست تکراری با update_id: {update_id} - نادیده گرفته شد")
             return {"status": "ok"}
         PROCESSED_MESSAGES.add(update_id)
-    asyncio.create_task(application.process_update(update_obj))
+    await application.process_update(update_obj)  # اینجا await اضافه شده
     return {"status": "ok"}
 
 @app.get("/")
@@ -504,10 +503,11 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update and hasattr(update, 'effective_message'):
         await update.effective_message.reply_text(clean_text("یه مشکلی پیش اومد! بعداً امتحان کن."), parse_mode="HTML")
 
-def main():
+async def setup_application():
     global application
     application = Application.builder().token(TOKEN).build()
 
+    # اضافه کردن هندلرها
     conv_handler_search = ConversationHandler(
         entry_points=[CallbackQueryHandler(search_items, pattern="^search_items$")],
         states={
@@ -534,10 +534,20 @@ def main():
     application.add_handler(InlineQueryHandler(inline_search))
     application.add_error_handler(error_handler)
 
-    schedule_scraping(application)
-    application.bot.set_webhook(WEBHOOK_URL)
+    # مقداردهی اولیه Application
+    await application.initialize()
+    
+    # تنظیم وب‌هوک
+    await application.bot.set_webhook(WEBHOOK_URL)
     logger.info("وب‌هوک تنظیم شد: %s", WEBHOOK_URL)
 
+    # زمان‌بندی scraping
+    schedule_scraping(application)
+
+# تابع راه‌اندازی اولیه
+@app.on_event("startup")
+async def on_startup():
+    await setup_application()
+
 if __name__ == "__main__":
-    main()
     uvicorn.run(app, host="0.0.0.0", port=8000)

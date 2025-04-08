@@ -1049,4 +1049,4 @@ async def main():
             image_conv_handler = ConversationHandler(
                 entry_points=[
                     CallbackQueryHandler(start_generate_image, pattern="^generate_image$"),
-                    CallbackQueryHandler(retry_generate_image
+                    CallbackQueryHandler(retry_generate_image)

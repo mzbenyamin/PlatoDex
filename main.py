@@ -1050,3 +1050,4 @@ async def main():
                 entry_points=[
                     CallbackQueryHandler(start_generate_image, pattern="^generate_image$"),
                     CallbackQueryHandler(retry_generate_image)
+                ],

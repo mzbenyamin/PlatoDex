@@ -823,7 +823,7 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "messages": [
             {"role": "system", "content": SYSTEM_MESSAGE}
         ] + chat_history,
-        "model": "searchgpt",
+        "model": "openai-large",
         "seed": 42,
         "jsonMode": False
     }

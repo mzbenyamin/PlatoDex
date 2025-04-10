@@ -640,21 +640,32 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("↩️ برگشت به لیست آیتم‌ها", callback_data="back_to_items")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
+    # ارسال پیام جدید به جای ویرایش پیام قبلی
     if item["images"]:
-        message = await query.message.reply_photo(
+        message = await context.bot.send_photo(
+            chat_id=query.message.chat_id,
             photo=item["images"][0],
             caption=results_text,
             reply_markup=reply_markup
         )
     else:
-        message = await query.message.reply_text(
-            results_text,
+        message = await context.bot.send_message(
+            chat_id=query.message.chat_id,
+            text=results_text,
             reply_markup=reply_markup
         )
     context.user_data["last_item_message_id"] = message.message_id
     
     for i, audio_info in enumerate(item["audios"], 1):
         await send_audio(update, context, item, audio_info, i, reply_markup)
+    
+    # حذف پیام لیست آیتم‌ها
+    last_items_message_id = context.user_data.get("last_items_message_id")
+    if last_items_message_id:
+        try:
+            await context.bot.delete_message(chat_id=query.message.chat_id, message_id=last_items_message_id)
+        except Exception as e:
+            logger.error(f"خطا در حذف پیام لیست آیتم‌ها: {e}")
     
     return SEARCH_ITEM
 
@@ -1040,16 +1051,19 @@ async def show_weekly_leaderboard(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text(clean_text("مشکلی تو گرفتن لیدربرد پیش اومد! 😅"))
         return
     
-    message_text = clean_text("🏆 جدول امتیازات\nبرندگان برتر رتبه‌بندی هفتگی - همه بازی‌ها\n\nبردها 🏆 | آیدی بازیکن 🔖")
+    message_text = clean_text("🏆 جدول امتیازات\nبرندگان برتر رتبه‌بندی هفتگی - همه بازی‌ها\n\n")
     keyboard = []
-    for i in range(0, len(leaderboard), 3):
-        row = leaderboard[i:i+3]
-        buttons = []
-        for player in row:
-            button_text = clean_text(f"{player['wins']} | {player['username']}")
-            callback_data = f"leader_{player['player_id']}"
-            buttons.append(InlineKeyboardButton(button_text, callback_data=callback_data))
-        keyboard.append(buttons)
+    # تیتر ستون‌ها
+    keyboard.append([
+        InlineKeyboardButton("بردها 🏆", callback_data="noop"),
+        InlineKeyboardButton("آیدی بازیکن 🔖", callback_data="noop")
+    ])
+    # اطلاعات بازیکنان
+    for player in leaderboard[:10]:  # فقط 10 نفر برتر
+        keyboard.append([
+            InlineKeyboardButton(player['wins'], callback_data=f"leader_{player['player_id']}"),
+            InlineKeyboardButton(player['username'], callback_data=f"leader_{player['player_id']}")
+        ])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
@@ -1071,7 +1085,7 @@ async def handle_leaderboard_selection(update: Update, context: ContextTypes.DEF
     player_text = clean_text(
         f"آیدی بازیکن 🔖: {player['username']}\n"
         f"بردها 🏆: {player['wins']}\n"
-        f"لیست بازی‌هایی که انجام شده 👇 توسط این بازیکن"
+        f"لیست بازی‌هایی که انجام شده 👇 توسط این بازیکن\n\n"
     )
     
     profile_data = scrape_profile(player['player_link'])
@@ -1100,17 +1114,22 @@ async def send_paginated_profile_games(update: Update, context: ContextTypes.DEF
         f"آیدی بازیکن 🔖: {player['username']}\n"
         f"بردها 🏆: {player['wins']}\n"
         f"لیست بازی‌هایی که انجام شده 👇 توسط این بازیکن\n\n"
-        f"اسم بازی 🎮 | بازی شده 🕹 | بردها 🎖"
     )
     
     keyboard = []
-    for i in range(0, len(current_games), 3):
-        row = current_games[i:i+3]
-        buttons = []
-        for game in row:
-            button_text = clean_text(f"{game['game_name']} | {game['played']} | {game['won']}")
-            buttons.append(InlineKeyboardButton(button_text, callback_data=f"game_{player['player_id']}_{game['game_name']}"))
-        keyboard.append(buttons)
+    # تیتر ستون‌ها
+    keyboard.append([
+        InlineKeyboardButton("اسم بازی 🎮", callback_data="noop"),
+        InlineKeyboardButton("بازی شده 🕹", callback_data="noop"),
+        InlineKeyboardButton("بردها 🎖", callback_data="noop")
+    ])
+    # اطلاعات بازی‌ها
+    for game in current_games:
+        keyboard.append([
+            InlineKeyboardButton(game['game_name'], callback_data=f"game_{player['player_id']}_{game['game_name']}"),
+            InlineKeyboardButton(game['played'], callback_data=f"game_{player['player_id']}_{game['game_name']}"),
+            InlineKeyboardButton(game['won'], callback_data=f"game_{player['player_id']}_{game['game_name']}")
+        ])
     
     nav_buttons = []
     if page > 0:
@@ -1181,20 +1200,26 @@ async def back_to_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE
         await query.message.reply_text(clean_text("مشکلی تو گرفتن لیدربرد پیش اومد! 😅"))
         return
     
-    message_text = clean_text("🏆 جدول امتیازات\nبرندگان برتر رتبه‌بندی هفتگی - همه بازی‌ها\n\nبردها 🏆 | آیدی بازیکن 🔖")
+    message_text = clean_text("🏆 جدول امتیازات\nبرندگان برتر رتبه‌بندی هفتگی - همه بازی‌ها\n\n")
     keyboard = []
-    for i in range(0, len(leaderboard), 3):
-        row = leaderboard[i:i+3]
-        buttons = []
-        for player in row:
-            button_text = clean_text(f"{player['wins']} | {player['username']}")
-            callback_data = f"leader_{player['player_id']}"
-            buttons.append(InlineKeyboardButton(button_text, callback_data=callback_data))
-        keyboard.append(buttons)
+    keyboard.append([
+        InlineKeyboardButton("بردها 🏆", callback_data="noop"),
+        InlineKeyboardButton("آیدی بازیکن 🔖", callback_data="noop")
+    ])
+    for player in leaderboard[:10]:
+        keyboard.append([
+            InlineKeyboardButton(player['wins'], callback_data=f"leader_{player['player_id']}"),
+            InlineKeyboardButton(player['username'], callback_data=f"leader_{player['player_id']}")
+        ])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     thread_id = query.message.message_thread_id if hasattr(query.message, 'is_topic_message') and query.message.is_topic_message else None
-    message = await query.message.reply_text(message_text, reply_markup=reply_markup, message_thread_id=thread_id)
+    message = await context.bot.send_message(
+        chat_id=query.message.chat_id,
+        text=message_text,
+        reply_markup=reply_markup,
+        message_thread_id=thread_id
+    )
     context.user_data["last_leaderboard_message_id"] = message.message_id
 
 # تشخیص کلمات لیدربرد در گروه
@@ -1227,10 +1252,17 @@ async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Chat with AI 🤖", callback_data="chat_with_ai")],
         [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")]
     ]
-    await query.edit_message_text(
+    # ارسال پیام جدید به جای ویرایش
+    await context.bot.send_message(
+        chat_id=query.message.chat_id,
         text=welcome_message,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
+    # حذف پیام قبلی
+    try:
+        await query.message.delete()
+    except Exception as e:
+        logger.error(f"خطا در حذف پیام قبلی: {e}")
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):

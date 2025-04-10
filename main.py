@@ -962,7 +962,7 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
         "messages": [
             {"role": "system", "content": SYSTEM_MESSAGE}
         ] + user_history,
-        "model": "searchgpt",
+        "model": "openai-large",
         "seed": 42,
         "jsonMode": False
     }

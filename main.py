@@ -301,7 +301,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• آیتم‌ها رو ببین 🎲\n• رتبه‌بندی بازیکن‌ها رو چک کن 🏆\n• اخبار رو دنبال کن 🎯"
     )
     keyboard = [
-        [InlineKeyboardButton("Run App 📱", web_app={"url": "https://platodex-tde3qe.vercel.app/"})],
+        [InlineKeyboardButton("Run App 📱", web_app={"url": "https://v0-gram-file-mini-app.vercel.app/items"})],
         [InlineKeyboardButton("Search Items 🔍", callback_data="search_items")],
         [InlineKeyboardButton("Chat with AI 🤖", callback_data="chat_with_ai")],
         [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")]
@@ -1247,7 +1247,7 @@ async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• آیتم‌ها رو ببین 🎲\n• رتبه‌بندی بازیکن‌ها رو چک کن 🏆\n• اخبار رو دنبال کن 🎯"
     )
     keyboard = [
-        [InlineKeyboardButton("Run App 📱", web_app={"url": "https://platodex-tde3qe.vercel.app/"})],
+        [InlineKeyboardButton("Run App 📱", web_app={"url": "https://v0-gram-file-mini-app.vercel.app/items"})],
         [InlineKeyboardButton("Search Items 🔍", callback_data="search_items")],
         [InlineKeyboardButton("Chat with AI 🤖", callback_data="chat_with_ai")],
         [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")]

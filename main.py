@@ -1,7 +1,7 @@
-# main.py
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent, InputFile
 from telegram.ext import Application, CommandHandler, ContextTypes, InlineQueryHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler
 import requests
+from bs4 import BeautifulSoup  # اضافه شده
 import json
 import re
 import html

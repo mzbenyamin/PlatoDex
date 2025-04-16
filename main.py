@@ -888,7 +888,7 @@ async def generate_image_in_group(update: Update, context: ContextTypes.DEFAULT_
     
     if not context.args:
         await update.message.reply_text(
-            clean_text("لطفاً یه توضیح برای تصویر بنویس! مثلاً: /p یک ماشین پرنده"),
+            clean_text("لطفاً یه توضیح برای تصویر بنویس به انگلیسی! مثلاً: /p A flying car"),
             message_thread_id=thread_id
         )
         return

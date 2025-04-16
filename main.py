@@ -814,7 +814,7 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     thread_id = query.message.message_thread_id if hasattr(query.message, 'is_topic_message') and query.message.is_topic_message else None
     
     if not item:
-        await query.edit_message_text(clean_text("آیتم پیدا نشد! 😕"))
+        await query.message.reply_text(clean_text("آیتم پیدا نشد! 😕"), message_thread_id=thread_id)
         return
     
     price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
@@ -829,49 +829,31 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📣 @PlatoDex"
     )
     
-    if item["images"]:
-        image_url = item["images"][0]
-        if image_url.lower().endswith('.webp'):
-            async def process_webp():
-                try:
-                    response = requests.get(image_url, timeout=20)
-                    response.raise_for_status()
-                    img = Image.open(io.BytesIO(response.content))
-                    gif_buffer = io.BytesIO()
-                    if img.mode != 'RGBA':
-                        img = img.convert('RGBA')
-                    img.save(gif_buffer, format='GIF', save_all=True, optimize=True)
-                    gif_buffer.seek(0)
-                    input_file = InputFile(gif_buffer, filename="animation.gif")
-                    await query.message.reply_animation(
-                        animation=input_file,
-                        caption=results_text,
-                        message_thread_id=thread_id
-                    )
-                    for i, audio_info in enumerate(item["audios"], 1):
-                        await send_audio(update, context, item, audio_info, i, None, thread_id)
-                except Exception as e:
-                    logger.error(f"خطا در تبدیل WebP: {e}")
-                    await query.message.reply_text(clean_text("مشکلی توی ارسال عکس پیش اومد! 😅"), message_thread_id=thread_id)
-            asyncio.create_task(process_webp())
-        elif image_url.lower().endswith('.gif'):
-            await query.message.reply_animation(
-                animation=image_url,
+    try:
+        # ارسال پیام جدید به جای ویرایش
+        if item["images"]:
+            message = await context.bot.send_photo(
+                chat_id=query.message.chat_id,
+                photo=item["images"][0],
                 caption=results_text,
                 message_thread_id=thread_id
             )
-            for i, audio_info in enumerate(item["audios"], 1):
-                await send_audio(update, context, item, audio_info, i, None, thread_id)
         else:
-            await query.message.reply_photo(
-                photo=image_url,
-                caption=results_text,
+            message = await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=results_text,
                 message_thread_id=thread_id
             )
-            for i, audio_info in enumerate(item["audios"], 1):
-                await send_audio(update, context, item, audio_info, i, None, thread_id)
-    else:
-        await query.message.reply_text(results_text)
+        
+        # ارسال صداها
+        for i, audio_info in enumerate(item["audios"], 1):
+            await send_audio(update, context, item, audio_info, i, None, thread_id)
+        
+        # حذف پیام لیست آیتم‌ها
+        await query.message.delete()
+    except Exception as e:
+        logger.error(f"خطا در ارسال مشخصات آیتم: {e}")
+        await query.message.reply_text(clean_text("مشکلی در نمایش آیتم پیش اومد! 😅"), message_thread_id=thread_id)
 
 async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -893,6 +875,65 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data["page"] = max(0, page - 1)
         await send_paginated_items(update, context, is_group=is_group)
         return SEARCH_ITEM if not is_group else None
+
+async def generate_image_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message_id = update.message.message_id
+    with PROCESSING_LOCK:
+        if message_id in PROCESSED_MESSAGES:
+            logger.warning(f"پیام تکراری در گروه با message_id: {message_id} - نادیده گرفته شد")
+            return
+        PROCESSED_MESSAGES.add(message_id)
+    
+    thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
+    
+    if not context.args:
+        await update.message.reply_text(
+            clean_text("لطفاً یه توضیح برای تصویر بنویس! مثلاً: /p یک ماشین پرنده"),
+            message_thread_id=thread_id
+        )
+        return
+    
+    prompt = " ".join(context.args).strip()
+    width = 1024  # پیش‌فرض 1024x1024
+    height = 1024
+    
+    loading_message = await update.message.reply_text(
+        clean_text("🖌️ در حال تولید عکس... لطفاً صبر کنید."),
+        message_thread_id=thread_id
+    )
+    
+    api_url = f"{IMAGE_API_URL}{prompt}?width={width}&height={height}&nologo=true"
+    try:
+        response = requests.get(api_url, timeout=30)
+        if response.status_code == 200:
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=loading_message.message_id
+            )
+            await update.message.reply_photo(
+                photo=response.content,
+                caption=clean_text(f"تصویر تولیدشده: {prompt}"),
+                message_thread_id=thread_id
+            )
+        else:
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=loading_message.message_id
+            )
+            await update.message.reply_text(
+                clean_text("مشکلی در تولید تصویر پیش اومد! 😅 دوباره امتحان کن."),
+                message_thread_id=thread_id
+            )
+    except Exception as e:
+        await context.bot.delete_message(
+            chat_id=update.effective_chat.id,
+            message_id=loading_message.message_id
+        )
+        await update.message.reply_text(
+            clean_text("خطایی رخ داد! 😭 بعداً امتحان کن."),
+            message_thread_id=thread_id
+        )
+        logger.error(f"خطا در تولید تصویر: {e}")
 
 async def chat_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1297,71 +1338,71 @@ async def main():
                 raise RuntimeError("JobQueue فعال نیست!")
             
             await application.bot.set_webhook(url=WEBHOOK_URL)
-            logger.info(f"Webhook روی {WEBHOOK_URL} تنظیم شد.")
-            
-            schedule_scraping(application)
-            await extract_items()
             
             search_conv_handler = ConversationHandler(
                 entry_points=[CallbackQueryHandler(start_item_search, pattern="^search_items$")],
                 states={
-                    SELECT_CATEGORY: [
-                        CallbackQueryHandler(search_by_name, pattern="^search_by_name$"),
-                        CallbackQueryHandler(select_category, pattern="^select_category_"),
-                        CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_private_categories$")
-                    ],
                     SEARCH_ITEM: [
                         MessageHandler(filters.TEXT & ~filters.COMMAND, process_item_search),
                         CallbackQueryHandler(select_item, pattern="^select_item_"),
-                        CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_private$")
+                        CallbackQueryHandler(back_to_items, pattern="^back_to_items$"),
+                        CallbackQueryHandler(handle_pagination, pattern="^(next_page_private|prev_page_private)$")
+                    ],
+                    SELECT_CATEGORY: [
+                        CallbackQueryHandler(search_by_name, pattern="^search_by_name$"),
+                        CallbackQueryHandler(select_category, pattern="^select_category_"),
+                        CallbackQueryHandler(handle_pagination, pattern="^(next_page_private_categories|prev_page_private_categories)$")
                     ]
                 },
                 fallbacks=[
-                    CommandHandler("cancel", cancel),
-                    CommandHandler("start", start),
-                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
-                ],
-                name="item_search",
-                persistent=False
+                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$"),
+                    CommandHandler("cancel", cancel)
+                ]
             )
             
-            image_conv_handler = ConversationHandler(
-                entry_points=[
-                    CallbackQueryHandler(start_generate_image, pattern="^generate_image$"),
-                    CallbackQueryHandler(retry_generate_image, pattern="^retry_generate_image$")
-                ],
+            generate_image_conv_handler = ConversationHandler(
+                entry_points=[CallbackQueryHandler(start_generate_image, pattern="^generate_image$")],
                 states={
                     SELECT_SIZE: [CallbackQueryHandler(select_size, pattern="^size_")],
                     GET_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_prompt)]
                 },
                 fallbacks=[
-                    CommandHandler("cancel", cancel),
-                    CommandHandler("start", start),
-                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
-                ],
-                name="image_generation",
-                persistent=False
+                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$"),
+                    CallbackQueryHandler(retry_generate_image, pattern="^retry_generate_image$"),
+                    CommandHandler("cancel", cancel)
+                ]
             )
             
-            application.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
-            application.add_handler(CommandHandler("i", process_item_in_group, filters=filters.ChatType.GROUPS))
-            application.add_handler(CommandHandler("w", show_weekly_leaderboard, filters=filters.ChatType.GROUPS))
-            application.add_handler(CallbackQueryHandler(select_group_item, pattern="^select_group_item_"))
-            application.add_handler(CallbackQueryHandler(select_category, pattern="^select_category_"))
-            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_group"))
-            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_group_categories"))
-            application.add_handler(CallbackQueryHandler(handle_leaderboard_selection, pattern="^leader_"))
-            application.add_handler(CallbackQueryHandler(back_to_leaderboard, pattern="^back_to_leaderboard$"))
+            ai_chat_conv_handler = ConversationHandler(
+                entry_points=[CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$")],
+                states={},
+                fallbacks=[
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_message),
+                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$"),
+                    CommandHandler("cancel", cancel)
+                ]
+            )
+            
+            application.add_handler(CommandHandler("start", start))
             application.add_handler(search_conv_handler)
-            application.add_handler(image_conv_handler)
-            application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
-            application.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
+            application.add_handler(generate_image_conv_handler)
+            application.add_handler(ai_chat_conv_handler)
             application.add_handler(InlineQueryHandler(inline_query))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
+            application.add_handler(MessageHandler(filters.Regex(r"@PlatoDex.*"), handle_inline_selection))
+            application.add_handler(CommandHandler("i", process_item_in_group, filters=filters.ChatType.GROUPS))
+            application.add_handler(CommandHandler("p", generate_image_in_group, filters=filters.ChatType.GROUPS))
+            application.add_handler(CallbackQueryHandler(select_category, pattern="^select_category_"))
+            application.add_handler(CallbackQueryHandler(select_group_item, pattern="^select_group_item_"))
+            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(next_page_group|prev_page_group|next_page_group_categories|prev_page_group_categories)$"))
+            application.add_handler(CommandHandler("leaderboard", show_weekly_leaderboard, filters=filters.ChatType.GROUPS))
+            application.add_handler(CallbackQueryHandler(handle_leaderboard_selection, pattern="^leader_"))
+            application.add_handler(CallbackQueryHandler(handle_profile_pagination, pattern="^(next_profile_page|prev_profile_page)$"))
+            application.add_handler(CallbackQueryHandler(back_to_leaderboard, pattern="^back_to_leaderboard$"))
+            application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(لیدربرد|لیدر برد)") & filters.ChatType.GROUPS, detect_leaderboard_command))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, detect_leaderboard_command))
-            application.add_handler(MessageHandler(filters.Regex(r"🔖 نام"), handle_inline_selection))
             application.add_error_handler(error_handler)
+            
+            schedule_scraping(application)
             
             logger.info("در حال آماده‌سازی ربات...")
             await application.initialize()
@@ -1372,14 +1413,18 @@ async def main():
             server = uvicorn.Server(config)
             await server.serve()
             
+            break
         except Exception as e:
             logger.error(f"خطا در تلاش {attempt + 1}/{max_retries}: {e}")
             if attempt < max_retries - 1:
                 logger.info(f"تلاش دوباره بعد از {retry_delay} ثانیه...")
                 await asyncio.sleep(retry_delay)
             else:
-                logger.error("همه تلاش‌ها برای شروع ربات ناموفق بود!")
+                logger.error("همه تلاش‌ها ناموفق بود!")
                 raise
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        finally:
+            if application:
+                logger.info("در حال خاموش کردن ربات...")
+                await application.stop()
+                await application.shutdown()
+                logger.info("ربات خاموش شد.")

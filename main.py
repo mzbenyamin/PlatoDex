@@ -1329,6 +1329,9 @@ async def main():
     max_retries = 3
     retry_delay = 5
     
+    # گرفتن پورت از متغیر محیطی Render یا پیش‌فرض 8000
+    port = int(os.getenv("PORT", 8000))
+    
     for attempt in range(max_retries):
         try:
             application = Application.builder().token(TOKEN).read_timeout(60).write_timeout(60).connect_timeout(60).build()
@@ -1338,68 +1341,58 @@ async def main():
                 raise RuntimeError("JobQueue فعال نیست!")
             
             await application.bot.set_webhook(url=WEBHOOK_URL)
+            logger.info(f"Webhook روی {WEBHOOK_URL} تنظیم شد")
             
-            search_conv_handler = ConversationHandler(
-                entry_points=[CallbackQueryHandler(start_item_search, pattern="^search_items$")],
+            conv_handler = ConversationHandler(
+                entry_points=[
+                    CommandHandler("start", start),
+                    CallbackQueryHandler(start_item_search, pattern="search_items"),
+                    CallbackQueryHandler(chat_with_ai, pattern="chat_with_ai"),
+                    CallbackQueryHandler(start_generate_image, pattern="generate_image")
+                ],
                 states={
                     SEARCH_ITEM: [
                         MessageHandler(filters.TEXT & ~filters.COMMAND, process_item_search),
-                        CallbackQueryHandler(select_item, pattern="^select_item_"),
-                        CallbackQueryHandler(back_to_items, pattern="^back_to_items$"),
-                        CallbackQueryHandler(handle_pagination, pattern="^(next_page_private|prev_page_private)$")
+                        CallbackQueryHandler(select_item, pattern="select_item_"),
+                        CallbackQueryHandler(back_to_items, pattern="back_to_items"),
+                        CallbackQueryHandler(handle_pagination, pattern="prev_page_private|next_page_private")
                     ],
                     SELECT_CATEGORY: [
-                        CallbackQueryHandler(search_by_name, pattern="^search_by_name$"),
-                        CallbackQueryHandler(select_category, pattern="^select_category_"),
-                        CallbackQueryHandler(handle_pagination, pattern="^(next_page_private_categories|prev_page_private_categories)$")
+                        CallbackQueryHandler(search_by_name, pattern="search_by_name"),
+                        CallbackQueryHandler(select_category, pattern="select_category_"),
+                        CallbackQueryHandler(handle_pagination, pattern="prev_page_private_categories|next_page_private_categories")
+                    ],
+                    SELECT_SIZE: [
+                        CallbackQueryHandler(select_size, pattern="size_"),
+                        CallbackQueryHandler(back_to_home, pattern="back_to_home")
+                    ],
+                    GET_PROMPT: [
+                        MessageHandler(filters.TEXT & ~filters.COMMAND, get_prompt),
+                        CallbackQueryHandler(retry_generate_image, pattern="retry_generate_image"),
+                        CallbackQueryHandler(back_to_home, pattern="back_to_home")
                     ]
                 },
                 fallbacks=[
-                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$"),
-                    CommandHandler("cancel", cancel)
+                    CommandHandler("cancel", cancel),
+                    CallbackQueryHandler(back_to_home, pattern="back_to_home")
                 ]
             )
             
-            generate_image_conv_handler = ConversationHandler(
-                entry_points=[CallbackQueryHandler(start_generate_image, pattern="^generate_image$")],
-                states={
-                    SELECT_SIZE: [CallbackQueryHandler(select_size, pattern="^size_")],
-                    GET_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_prompt)]
-                },
-                fallbacks=[
-                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$"),
-                    CallbackQueryHandler(retry_generate_image, pattern="^retry_generate_image$"),
-                    CommandHandler("cancel", cancel)
-                ]
-            )
-            
-            ai_chat_conv_handler = ConversationHandler(
-                entry_points=[CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$")],
-                states={},
-                fallbacks=[
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_message),
-                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$"),
-                    CommandHandler("cancel", cancel)
-                ]
-            )
-            
-            application.add_handler(CommandHandler("start", start))
-            application.add_handler(search_conv_handler)
-            application.add_handler(generate_image_conv_handler)
-            application.add_handler(ai_chat_conv_handler)
+            application.add_handler(conv_handler)
             application.add_handler(InlineQueryHandler(inline_query))
-            application.add_handler(MessageHandler(filters.Regex(r"@PlatoDex.*"), handle_inline_selection))
+            application.add_handler(MessageHandler(filters.Regex(r'^@PlatoDex\s+.+'), handle_inline_selection))
             application.add_handler(CommandHandler("i", process_item_in_group, filters=filters.ChatType.GROUPS))
             application.add_handler(CommandHandler("p", generate_image_in_group, filters=filters.ChatType.GROUPS))
-            application.add_handler(CallbackQueryHandler(select_category, pattern="^select_category_"))
-            application.add_handler(CallbackQueryHandler(select_group_item, pattern="^select_group_item_"))
-            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(next_page_group|prev_page_group|next_page_group_categories|prev_page_group_categories)$"))
-            application.add_handler(CommandHandler("leaderboard", show_weekly_leaderboard, filters=filters.ChatType.GROUPS))
-            application.add_handler(CallbackQueryHandler(handle_leaderboard_selection, pattern="^leader_"))
-            application.add_handler(CallbackQueryHandler(handle_profile_pagination, pattern="^(next_profile_page|prev_profile_page)$"))
-            application.add_handler(CallbackQueryHandler(back_to_leaderboard, pattern="^back_to_leaderboard$"))
-            application.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"(لیدربرد|لیدر برد)") & filters.ChatType.GROUPS, detect_leaderboard_command))
+            application.add_handler(CallbackQueryHandler(select_category, pattern="select_category_"))
+            application.add_handler(CallbackQueryHandler(select_group_item, pattern="select_group_item_"))
+            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="prev_page_group|next_page_group|prev_page_group_categories|next_page_group_categories"))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
+            application.add_handler(CommandHandler("leaderboard", show_weekly_leaderboard, filters=filters.ChatType.GROUPS))
+            application.add_handler(CallbackQueryHandler(handle_leaderboard_selection, pattern="leader_"))
+            application.add_handler(CallbackQueryHandler(handle_profile_pagination, pattern="prev_profile_page|next_profile_page"))
+            application.add_handler(CallbackQueryHandler(back_to_leaderboard, pattern="back_to_leaderboard"))
+            application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, detect_leaderboard_command))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
             application.add_error_handler(error_handler)
             
             schedule_scraping(application)
@@ -1409,7 +1402,8 @@ async def main():
             logger.info("در حال شروع ربات...")
             await application.start()
             
-            config = uvicorn.Config(app, host="0.0.0.0", port=8000)
+            logger.info(f"راه‌اندازی سرور روی پورت {port}...")
+            config = uvicorn.Config(app, host="0.0.0.0", port=port)
             server = uvicorn.Server(config)
             await server.serve()
             

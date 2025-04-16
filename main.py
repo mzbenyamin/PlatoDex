@@ -24,6 +24,7 @@ import io
 import tempfile
 import os
 from threading import Lock
+import os
 from rembg import remove
 
 # تنظیم لاگ
@@ -1527,7 +1528,7 @@ def main():
     logger.info("در حال تنظیم وب‌هوک...")
     application.run_webhook(
         listen="0.0.0.0",
-        port=8000,
+        port=int(os.getenv("PORT", 8000)),
         url_path="/webhook",
         webhook_url=WEBHOOK_URL,
     )
@@ -1535,7 +1536,9 @@ def main():
 if __name__ == "__main__":
     try:
         logger.info("شروع ربات...")
-        uvicorn.run(app, host="0.0.0.0", port=8000)
+        port = int(os.getenv("PORT", 8000))
+logger.info(f"اجرای uvicorn روی پورت {port}...")
+uvicorn.run(app, host="0.0.0.0", port=port)
     except Exception as e:
         logger.error(f"خطا در اجرای ربات: {e}")
         raise SystemExit(1)

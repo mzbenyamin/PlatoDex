@@ -4,3 +4,4 @@ beautifulsoup4>=4.12.3
 fastapi>=0.110.0
 uvicorn>=0.29.0
 pillow>=10.2.0
+rembg>=2.0.59

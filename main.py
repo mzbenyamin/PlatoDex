@@ -1340,62 +1340,78 @@ async def main():
                 logger.error("JobQueue فعال نیست!")
                 raise RuntimeError("JobQueue فعال نیست!")
             
+            # تنظیم Webhook
             await application.bot.set_webhook(url=WEBHOOK_URL)
             logger.info(f"Webhook روی {WEBHOOK_URL} تنظیم شد")
             
-            conv_handler = ConversationHandler(
-                entry_points=[
-                    CommandHandler("start", start),
-                    CallbackQueryHandler(start_item_search, pattern="search_items"),
-                    CallbackQueryHandler(chat_with_ai, pattern="chat_with_ai"),
-                    CallbackQueryHandler(start_generate_image, pattern="generate_image")
-                ],
+            # اجرای اولیه اسکرپینگ آیتم‌ها
+            schedule_scraping(application)
+            await extract_items()
+            
+            # Conversation Handler برای جست‌وجوی آیتم‌ها
+            search_conv_handler = ConversationHandler(
+                entry_points=[CallbackQueryHandler(start_item_search, pattern="^search_items$")],
                 states={
+                    SELECT_CATEGORY: [
+                        CallbackQueryHandler(search_by_name, pattern="^search_by_name$"),
+                        CallbackQueryHandler(select_category, pattern="^select_category_"),
+                        CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_private_categories$")
+                    ],
                     SEARCH_ITEM: [
                         MessageHandler(filters.TEXT & ~filters.COMMAND, process_item_search),
-                        CallbackQueryHandler(select_item, pattern="select_item_"),
-                        CallbackQueryHandler(back_to_items, pattern="back_to_items"),
-                        CallbackQueryHandler(handle_pagination, pattern="prev_page_private|next_page_private")
-                    ],
-                    SELECT_CATEGORY: [
-                        CallbackQueryHandler(search_by_name, pattern="search_by_name"),
-                        CallbackQueryHandler(select_category, pattern="select_category_"),
-                        CallbackQueryHandler(handle_pagination, pattern="prev_page_private_categories|next_page_private_categories")
-                    ],
-                    SELECT_SIZE: [
-                        CallbackQueryHandler(select_size, pattern="size_"),
-                        CallbackQueryHandler(back_to_home, pattern="back_to_home")
-                    ],
-                    GET_PROMPT: [
-                        MessageHandler(filters.TEXT & ~filters.COMMAND, get_prompt),
-                        CallbackQueryHandler(retry_generate_image, pattern="retry_generate_image"),
-                        CallbackQueryHandler(back_to_home, pattern="back_to_home")
+                        CallbackQueryHandler(select_item, pattern="^select_item_"),
+                        CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_private$")
                     ]
                 },
                 fallbacks=[
                     CommandHandler("cancel", cancel),
-                    CallbackQueryHandler(back_to_home, pattern="back_to_home")
-                ]
+                    CommandHandler("start", start),
+                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
+                ],
+                name="item_search",
+                persistent=False
             )
             
-            application.add_handler(conv_handler)
-            application.add_handler(InlineQueryHandler(inline_query))
-            application.add_handler(MessageHandler(filters.Regex(r'^@PlatoDex\s+.+'), handle_inline_selection))
+            # Conversation Handler برای تولید تصویر
+            image_conv_handler = ConversationHandler(
+                entry_points=[
+                    CallbackQueryHandler(start_generate_image, pattern="^generate_image$"),
+                    CallbackQueryHandler(retry_generate_image, pattern="^retry_generate_image$")
+                ],
+                states={
+                    SELECT_SIZE: [CallbackQueryHandler(select_size, pattern="^size_")],
+                    GET_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_prompt)]
+                },
+                fallbacks=[
+                    CommandHandler("cancel", cancel),
+                    CommandHandler("start", start),
+                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
+                ],
+                name="image_generation",
+                persistent=False
+            )
+            
+            # اضافه کردن هندلرها
+            application.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
             application.add_handler(CommandHandler("i", process_item_in_group, filters=filters.ChatType.GROUPS))
             application.add_handler(CommandHandler("p", generate_image_in_group, filters=filters.ChatType.GROUPS))
-            application.add_handler(CallbackQueryHandler(select_category, pattern="select_category_"))
-            application.add_handler(CallbackQueryHandler(select_group_item, pattern="select_group_item_"))
-            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="prev_page_group|next_page_group|prev_page_group_categories|next_page_group_categories"))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
-            application.add_handler(CommandHandler("leaderboard", show_weekly_leaderboard, filters=filters.ChatType.GROUPS))
-            application.add_handler(CallbackQueryHandler(handle_leaderboard_selection, pattern="leader_"))
-            application.add_handler(CallbackQueryHandler(handle_profile_pagination, pattern="prev_profile_page|next_profile_page"))
-            application.add_handler(CallbackQueryHandler(back_to_leaderboard, pattern="back_to_leaderboard"))
-            application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, detect_leaderboard_command))
+            application.add_handler(CommandHandler("w", show_weekly_leaderboard, filters=filters.ChatType.GROUPS))
+            application.add_handler(CallbackQueryHandler(select_group_item, pattern="^select_group_item_"))
+            application.add_handler(CallbackQueryHandler(select_category, pattern="^select_category_"))
+            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_group"))
+            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_group_categories"))
+            application.add_handler(CallbackQueryHandler(handle_leaderboard_selection, pattern="^leader_"))
+            application.add_handler(CallbackQueryHandler(back_to_leaderboard, pattern="^back_to_leaderboard$"))
+            application.add_handler(search_conv_handler)
+            application.add_handler(image_conv_handler)
+            application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
+            application.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
+            application.add_handler(InlineQueryHandler(inline_query))
+            application.add_handler(MessageHandler(filters.Regex(r"🔖 نام"), handle_inline_selection))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, detect_leaderboard_command))
             application.add_error_handler(error_handler)
-            
-            schedule_scraping(application)
             
             logger.info("در حال آماده‌سازی ربات...")
             await application.initialize()
@@ -1414,7 +1430,7 @@ async def main():
                 logger.info(f"تلاش دوباره بعد از {retry_delay} ثانیه...")
                 await asyncio.sleep(retry_delay)
             else:
-                logger.error("همه تلاش‌ها ناموفق بود!")
+                logger.error("همه تلاش‌ها برای شروع ربات ناموفق بود!")
                 raise
         finally:
             if application:
@@ -1422,3 +1438,6 @@ async def main():
                 await application.stop()
                 await application.shutdown()
                 logger.info("ربات خاموش شد.")
+                
+if __name__ == "__main__":
+    asyncio.run(main())

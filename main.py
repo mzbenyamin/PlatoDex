@@ -1,5 +1,14 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent, InputFile
-from telegram.ext import Application, CommandHandler, ContextTypes, InlineQueryHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+    InlineQueryHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+    ConversationHandler,
+)
 import requests
 from bs4 import BeautifulSoup
 import json
@@ -15,6 +24,7 @@ import io
 import tempfile
 import os
 from threading import Lock
+from rembg import remove
 
 # تنظیم لاگ
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -31,6 +41,7 @@ EXTRACTED_ITEMS = []
 AI_CHAT_USERS = set()
 SEARCH_ITEM, SELECT_CATEGORY = range(2)
 SELECT_SIZE, GET_PROMPT = range(2, 4)
+REMOVE_BG = 4  # حالت جدید برای حذف پس‌زمینه
 DEFAULT_CHAT_ID = 789912945
 PROCESSED_MESSAGES = set()
 PROCESSING_LOCK = Lock()
@@ -305,7 +316,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Run App 📱", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
         [InlineKeyboardButton("Search Items 🔍", callback_data="search_items")],
         [InlineKeyboardButton("Chat with AI 🤖", callback_data="chat_with_ai")],
-        [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")]
+        [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")],
+        [InlineKeyboardButton("حذف پس‌زمینه پروفایل 🖌️", callback_data="remove_bg")]  # دکمه جدید
     ]
     await update.message.reply_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
@@ -395,6 +407,63 @@ async def retry_generate_image(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup=reply_markup
     )
     return SELECT_SIZE
+
+async def start_remove_bg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data.clear()
+    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(
+        clean_text("🖌️ حذف پس‌زمینه فعال شد!\n\nلطفاً یه عکس آپلود کن تا پس‌زمینه‌ش رو برات حذف کنم! 😎"),
+        reply_markup=reply_markup
+    )
+    return REMOVE_BG
+
+async def handle_remove_bg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message_id = update.message.message_id
+    with PROCESSING_LOCK:
+        if message_id in PROCESSED_MESSAGES:
+            logger.warning(f"پیام تکراری در حذف پس‌زمینه با message_id: {message_id} - نادیده گرفته شد")
+            return REMOVE_BG
+        PROCESSED_MESSAGES.add(message_id)
+    
+    if not update.message.photo:
+        await update.message.reply_text(clean_text("لطفاً یه عکس آپلود کن! 😅"))
+        return REMOVE_BG
+
+    # گرفتن فایل عکس
+    photo = update.message.photo[-1]
+    file = await photo.get_file()
+    file_bytes = await file.download_as_bytearray()
+
+    loading_message = await update.message.reply_text(clean_text("🖌️ در حال حذف پس‌زمینه... یه کم صبر کن!"))
+
+    try:
+        # حذف پس‌زمینه با rembg
+        input_image = Image.open(io.BytesIO(file_bytes))
+        output_image = remove(input_image)
+
+        # ذخیره تصویر خروجی
+        output_buffer = io.BytesIO()
+        output_image.save(output_buffer, format="PNG")
+        output_buffer.seek(0)
+
+        # ارسال تصویر به کاربر
+        await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
+        keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_photo(
+            photo=output_buffer,
+            caption=clean_text("تصویر بدون پس‌زمینه آماده‌ست! 🎉 چی فکر می‌کنی؟"),
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
+        logger.error(f"خطا در حذف پس‌زمینه: {e}")
+        await update.message.reply_text(clean_text("اوپس، یه مشکلی پیش اومد! 😅 دوباره امتحان کن!"))
+    
+    return ConversationHandler.END
 
 async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.inline_query.query
@@ -849,7 +918,7 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for i, audio_info in enumerate(item["audios"], 1):
             await send_audio(update, context, item, audio_info, i, None, thread_id)
         
-        # حذف پیام لیست آیتم‌ها
+        # حذف پیام لیست آیت.DecodeError
         await query.message.delete()
     except Exception as e:
         logger.error(f"خطا در ارسال مشخصات آیتم: {e}")
@@ -1264,11 +1333,12 @@ async def back_to_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     context.user_data["last_leaderboard_message_id"] = message.message_id
 
-# تشخیص کلمات لیدربرد در گروه
+    # تشخیص کلمات لیدربرد در گروه
 async def detect_leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_id = update.message.message_id
     with PROCESSING_LOCK:
         if message_id in PROCESSED_MESSAGES:
+            logger.warning(f"پیام تکراری در گروه با message_id: {message_id} - نادیده گرفته شد")
             return
         PROCESSED_MESSAGES.add(message_id)
     
@@ -1279,165 +1349,193 @@ async def detect_leaderboard_command(update: Update, context: ContextTypes.DEFAU
 async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    
     user_id = update.effective_user.id
     if user_id in AI_CHAT_USERS:
         AI_CHAT_USERS.remove(user_id)
+    
     context.user_data.clear()
-    user_name = query.from_user.first_name
     welcome_message = clean_text(
-        f"سلام {user_name}!\nبه PlatoDex خوش اومدی - مرکز بازی‌های Plato!\n"
-        "• آیتم‌ها رو ببین 🎲\n• رتبه‌بندی بازیکن‌ها رو چک کن 🏆\n• اخبار رو دنبال کن 🎯"
+        "🏠 برگشتی به خونه! 😎\n"
+        "اینجا PlatoDexه، آماده‌ام بهت کمک کنم! 🚀\n"
+        "• آیتم‌ها رو ببین 🎲\n"
+        "• رتبه‌بندی بازیکن‌ها رو چک کن 🏆\n"
+        "• یا هر چی دلت خواست بگو! 😜"
     )
     keyboard = [
         [InlineKeyboardButton("Run App 📱", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
         [InlineKeyboardButton("Search Items 🔍", callback_data="search_items")],
         [InlineKeyboardButton("Chat with AI 🤖", callback_data="chat_with_ai")],
-        [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")]
+        [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")],
+        [InlineKeyboardButton("حذف پس‌زمینه پروفایل 🖌️", callback_data="remove_bg")]
     ]
-    # ارسال پیام جدید به جای ویرایش
-    await context.bot.send_message(
-        chat_id=query.message.chat_id,
-        text=welcome_message,
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    # حذف پیام قبلی
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     try:
-        await query.message.delete()
+        await query.edit_message_text(welcome_message, reply_markup=reply_markup)
     except Exception as e:
-        logger.error(f"خطا در حذف پیام قبلی: {e}")
+        logger.error(f"خطا در بازگشت به منوی اصلی: {e}")
+        await query.message.reply_text(welcome_message, reply_markup=reply_markup)
+    
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
     user_id = update.effective_user.id
     if user_id in AI_CHAT_USERS:
         AI_CHAT_USERS.remove(user_id)
-    await update.message.reply_text(clean_text("عملیات لغو شد."), reply_markup=InlineKeyboardMarkup([]))
-    await start(update, context)
+    
+    context.user_data.clear()
+    keyboard = [
+        [InlineKeyboardButton("Run App 📱", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
+        [InlineKeyboardButton("Search Items 🔍", callback_data="search_items")],
+        [InlineKeyboardButton("Chat with AI 🤖", callback_data="chat_with_ai")],
+        [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")],
+        [InlineKeyboardButton("حذف پس‌زمینه پروفایل 🖌️", callback_data="remove_bg")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(
+        clean_text("عملیات لغو شد! 😎 حالا چی دوست داری انجام بدیم؟ 🚀"),
+        reply_markup=reply_markup
+    )
     return ConversationHandler.END
+
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    if query.data == "search_items":
+        return await start_item_search(update, context)
+    elif query.data == "chat_with_ai":
+        return await chat_with_ai(update, context)
+    elif query.data == "generate_image":
+        return await start_generate_image(update, context)
+    elif query.data == "remove_bg":
+        return await start_remove_bg(update, context)
+    elif query.data == "back_to_home":
+        return await back_to_home(update, context)
+    elif query.data == "search_by_name":
+        return await search_by_name(update, context)
+    elif query.data == "back_to_items":
+        return await back_to_items(update, context)
+    elif query.data == "retry_generate_image":
+        return await retry_generate_image(update, context)
+    elif query.data.startswith("size_"):
+        return await select_size(update, context)
+    elif query.data.startswith("select_item_"):
+        return await select_item(update, context)
+    elif query.data.startswith("select_group_item_"):
+        return await select_group_item(update, context)
+    elif query.data.startswith("select_category_"):
+        return await select_category(update, context)
+    elif query.data.startswith("prev_page_") or query.data.startswith("next_page_"):
+        return await handle_pagination(update, context)
+    elif query.data.startswith("leader_"):
+        return await handle_leaderboard_selection(update, context)
+    elif query.data in ["prev_profile_page", "next_profile_page"]:
+        return await handle_profile_pagination(update, context)
+    elif query.data == "back_to_leaderboard":
+        return await back_to_leaderboard(update, context)
+    elif query.data == "noop":
+        await query.answer()
+        return
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"خطا رخ داد: {context.error}")
-    if str(context.error) == "Query is too old and response timeout expired or query id is invalid":
-        if update and update.callback_query:
-            await update.callback_query.message.reply_text(clean_text("اوپس، یه کم دیر شد! دوباره امتحان کن 😅"))
-    elif update and update.message:
-        await update.message.reply_text(clean_text("یه مشکلی پیش اومد! 😅 دوباره امتحان کن!"))
+    try:
+        if update and update.effective_message:
+            await update.effective_message.reply_text(
+                clean_text("اوپس، یه مشکلی پیش اومد! 😅 دوباره امتحان کن یا بعدا بیا! 🚀")
+            )
+    except Exception as e:
+        logger.error(f"خطا در هندل کردن خطا: {e}")
 
-async def main():
+def main():
     global application
-    max_retries = 3
-    retry_delay = 5
+    application = Application.builder().token(TOKEN).build()
     
-    # گرفتن پورت از متغیر محیطی Render یا پیش‌فرض 8000
-    port = int(os.getenv("PORT", 8000))
+    # هندلرهای Conversation
+    item_search_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_item_search, pattern="^search_items$")],
+        states={
+            SELECT_CATEGORY: [
+                CallbackQueryHandler(select_category, pattern="^select_category_"),
+                CallbackQueryHandler(search_by_name, pattern="^search_by_name$"),
+                CallbackQueryHandler(handle_pagination, pattern="^(prev_page_private_categories|next_page_private_categories)$"),
+            ],
+            SEARCH_ITEM: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, process_item_search),
+                CallbackQueryHandler(select_item, pattern="^select_item_"),
+                CallbackQueryHandler(back_to_items, pattern="^back_to_items$"),
+                CallbackQueryHandler(handle_pagination, pattern="^(prev_page_private|next_page_private)$"),
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CallbackQueryHandler(back_to_home, pattern="^back_to_home$"),
+        ],
+    )
     
-    for attempt in range(max_retries):
-        try:
-            application = Application.builder().token(TOKEN).read_timeout(60).write_timeout(60).connect_timeout(60).build()
-            
-            if application.job_queue is None:
-                logger.error("JobQueue فعال نیست!")
-                raise RuntimeError("JobQueue فعال نیست!")
-            
-            # تنظیم Webhook
-            await application.bot.set_webhook(url=WEBHOOK_URL)
-            logger.info(f"Webhook روی {WEBHOOK_URL} تنظیم شد")
-            
-            # اجرای اولیه اسکرپینگ آیتم‌ها
-            schedule_scraping(application)
-            await extract_items()
-            
-            # Conversation Handler برای جست‌وجوی آیتم‌ها
-            search_conv_handler = ConversationHandler(
-                entry_points=[CallbackQueryHandler(start_item_search, pattern="^search_items$")],
-                states={
-                    SELECT_CATEGORY: [
-                        CallbackQueryHandler(search_by_name, pattern="^search_by_name$"),
-                        CallbackQueryHandler(select_category, pattern="^select_category_"),
-                        CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_private_categories$")
-                    ],
-                    SEARCH_ITEM: [
-                        MessageHandler(filters.TEXT & ~filters.COMMAND, process_item_search),
-                        CallbackQueryHandler(select_item, pattern="^select_item_"),
-                        CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_private$")
-                    ]
-                },
-                fallbacks=[
-                    CommandHandler("cancel", cancel),
-                    CommandHandler("start", start),
-                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
-                ],
-                name="item_search",
-                persistent=False
-            )
-            
-            # Conversation Handler برای تولید تصویر
-            image_conv_handler = ConversationHandler(
-                entry_points=[
-                    CallbackQueryHandler(start_generate_image, pattern="^generate_image$"),
-                    CallbackQueryHandler(retry_generate_image, pattern="^retry_generate_image$")
-                ],
-                states={
-                    SELECT_SIZE: [CallbackQueryHandler(select_size, pattern="^size_")],
-                    GET_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_prompt)]
-                },
-                fallbacks=[
-                    CommandHandler("cancel", cancel),
-                    CommandHandler("start", start),
-                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
-                ],
-                name="image_generation",
-                persistent=False
-            )
-            
-            # اضافه کردن هندلرها
-            application.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
-            application.add_handler(CommandHandler("i", process_item_in_group, filters=filters.ChatType.GROUPS))
-            application.add_handler(CommandHandler("p", generate_image_in_group, filters=filters.ChatType.GROUPS))
-            application.add_handler(CommandHandler("w", show_weekly_leaderboard, filters=filters.ChatType.GROUPS))
-            application.add_handler(CallbackQueryHandler(select_group_item, pattern="^select_group_item_"))
-            application.add_handler(CallbackQueryHandler(select_category, pattern="^select_category_"))
-            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_group"))
-            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_group_categories"))
-            application.add_handler(CallbackQueryHandler(handle_leaderboard_selection, pattern="^leader_"))
-            application.add_handler(CallbackQueryHandler(back_to_leaderboard, pattern="^back_to_leaderboard$"))
-            application.add_handler(search_conv_handler)
-            application.add_handler(image_conv_handler)
-            application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
-            application.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
-            application.add_handler(InlineQueryHandler(inline_query))
-            application.add_handler(MessageHandler(filters.Regex(r"🔖 نام"), handle_inline_selection))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, detect_leaderboard_command))
-            application.add_error_handler(error_handler)
-            
-            logger.info("در حال آماده‌سازی ربات...")
-            await application.initialize()
-            logger.info("در حال شروع ربات...")
-            await application.start()
-            
-            logger.info(f"راه‌اندازی سرور روی پورت {port}...")
-            config = uvicorn.Config(app, host="0.0.0.0", port=port)
-            server = uvicorn.Server(config)
-            await server.serve()
-            
-            break
-        except Exception as e:
-            logger.error(f"خطا در تلاش {attempt + 1}/{max_retries}: {e}")
-            if attempt < max_retries - 1:
-                logger.info(f"تلاش دوباره بعد از {retry_delay} ثانیه...")
-                await asyncio.sleep(retry_delay)
-            else:
-                logger.error("همه تلاش‌ها برای شروع ربات ناموفق بود!")
-                raise
-        finally:
-            if application:
-                logger.info("در حال خاموش کردن ربات...")
-                await application.stop()
-                await application.shutdown()
-                logger.info("ربات خاموش شد.")
-                
+    generate_image_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_generate_image, pattern="^generate_image$")],
+        states={
+            SELECT_SIZE: [
+                CallbackQueryHandler(select_size, pattern="^size_"),
+                CallbackQueryHandler(retry_generate_image, pattern="^retry_generate_image$"),
+            ],
+            GET_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_prompt)],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CallbackQueryHandler(back_to_home, pattern="^back_to_home$"),
+        ],
+    )
+    
+    remove_bg_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(start_remove_bg, pattern="^remove_bg$")],
+        states={
+            REMOVE_BG: [MessageHandler(filters.PHOTO, handle_remove_bg)],
+        },
+        fallbacks=[
+            CommandHandler("cancel", cancel),
+            CallbackQueryHandler(back_to_home, pattern="^back_to_home$"),
+        ],
+    )
+    
+    # ثبت هندلرها
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("cancel", cancel))
+    application.add_handler(item_search_handler)
+    application.add_handler(generate_image_handler)
+    application.add_handler(remove_bg_handler)
+    application.add_handler(InlineQueryHandler(inline_query))
+    application.add_handler(MessageHandler(filters.Regex(r"@PlatoDex\s+(.+)"), handle_inline_selection))
+    application.add_handler(CommandHandler("i", process_item_in_group))
+    application.add_handler(CommandHandler("p", generate_image_in_group))
+    application.add_handler(CallbackQueryHandler(button))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
+    application.add_handler(CommandHandler("l", show_weekly_leaderboard))
+    application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, detect_leaderboard_command))
+    
+    # هندلر خطا
+    application.add_error_handler(error_handler)
+    
+    # برنامه‌ریزی اسکرپ آیتم‌ها
+    schedule_scraping(application)
+    
+    # تنظیم وب‌هوک
+    logger.info("در حال تنظیم وب‌هوک...")
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=8000,
+        url_path="/webhook",
+        webhook_url=WEBHOOK_URL,
+    )
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        logger.info("شروع ربات...")
+        uvicorn.run(app, host="0.0.0.0", port=8000)
+    except Exception as e:
+        logger.error(f"خطا در اجرای ربات: {e}")
+        raise SystemExit(1)

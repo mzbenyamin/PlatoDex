@@ -27,6 +27,9 @@ from threading import Lock
 import os
 from rembg import remove
 import asyncio  # اضافه کردن برای آسینک
+import uvicorn
+import asyncio
+from PIL import Image
 
 # تنظیم لاگ
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)

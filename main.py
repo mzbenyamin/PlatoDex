@@ -912,7 +912,7 @@ async def generate_image_in_group(update: Update, context: ContextTypes.DEFAULT_
             )
             await update.message.reply_photo(
                 photo=response.content,
-                caption=clean_text(f"تصویر تولیدشده: {prompt}"),
+                caption=clean_text(f"🖼 پرامپ تصویر: {prompt}"),
                 message_thread_id=thread_id
             )
         else:

@@ -26,6 +26,7 @@ import os
 from threading import Lock
 import os
 from rembg import remove
+import asyncio  # اضافه کردن برای آسینک
 
 # تنظیم لاگ
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -1450,96 +1451,116 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"خطا در هندل کردن خطا: {e}")
 
-def main():
+async def main():
     global application
-    application = Application.builder().token(TOKEN).build()
+    max_retries = 3
+    retry_delay = 5
     
-    # هندلرهای Conversation
-    item_search_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(start_item_search, pattern="^search_items$")],
-        states={
-            SELECT_CATEGORY: [
-                CallbackQueryHandler(select_category, pattern="^select_category_"),
-                CallbackQueryHandler(search_by_name, pattern="^search_by_name$"),
-                CallbackQueryHandler(handle_pagination, pattern="^(prev_page_private_categories|next_page_private_categories)$"),
-            ],
-            SEARCH_ITEM: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, process_item_search),
-                CallbackQueryHandler(select_item, pattern="^select_item_"),
-                CallbackQueryHandler(back_to_items, pattern="^back_to_items$"),
-                CallbackQueryHandler(handle_pagination, pattern="^(prev_page_private|next_page_private)$"),
-            ],
-        },
-        fallbacks=[
-            CommandHandler("cancel", cancel),
-            CallbackQueryHandler(back_to_home, pattern="^back_to_home$"),
-        ],
-    )
-    
-    generate_image_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(start_generate_image, pattern="^generate_image$")],
-        states={
-            SELECT_SIZE: [
-                CallbackQueryHandler(select_size, pattern="^size_"),
-                CallbackQueryHandler(retry_generate_image, pattern="^retry_generate_image$"),
-            ],
-            GET_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_prompt)],
-        },
-        fallbacks=[
-            CommandHandler("cancel", cancel),
-            CallbackQueryHandler(back_to_home, pattern="^back_to_home$"),
-        ],
-    )
-    
-    remove_bg_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(start_remove_bg, pattern="^remove_bg$")],
-        states={
-            REMOVE_BG: [MessageHandler(filters.PHOTO, handle_remove_bg)],
-        },
-        fallbacks=[
-            CommandHandler("cancel", cancel),
-            CallbackQueryHandler(back_to_home, pattern="^back_to_home$"),
-        ],
-    )
-    
-    # ثبت هندلرها
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("cancel", cancel))
-    application.add_handler(item_search_handler)
-    application.add_handler(generate_image_handler)
-    application.add_handler(remove_bg_handler)
-    application.add_handler(InlineQueryHandler(inline_query))
-    application.add_handler(MessageHandler(filters.Regex(r"@PlatoDex\s+(.+)"), handle_inline_selection))
-    application.add_handler(CommandHandler("i", process_item_in_group))
-    application.add_handler(CommandHandler("p", generate_image_in_group))
-    application.add_handler(CallbackQueryHandler(button))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
-    application.add_handler(CommandHandler("l", show_weekly_leaderboard))
-    application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, detect_leaderboard_command))
-    
-    # هندلر خطا
-    application.add_error_handler(error_handler)
-    
-    # برنامه‌ریزی اسکرپ آیتم‌ها
-    schedule_scraping(application)
-    
-    # تنظیم وب‌هوک
-    port = int(os.getenv("PORT", 8000))
-    logger.info(f"در حال تنظیم وب‌هوک روی پورت {port}...")
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=port,
-        url_path="/webhook",
-        webhook_url=WEBHOOK_URL,
-    )
+    for attempt in range(max_retries):
+        try:
+            application = Application.builder().token(TOKEN).read_timeout(60).write_timeout(60).connect_timeout(60).build()
+            
+            if application.job_queue is None:
+                logger.error("JobQueue فعال نیست!")
+                raise RuntimeError("JobQueue فعال نیست!")
+            
+            # هندلرهای Conversation
+            item_search_handler = ConversationHandler(
+                entry_points=[CallbackQueryHandler(start_item_search, pattern="^search_items$")],
+                states={
+                    SELECT_CATEGORY: [
+                        CallbackQueryHandler(select_category, pattern="^select_category_"),
+                        CallbackQueryHandler(search_by_name, pattern="^search_by_name$"),
+                        CallbackQueryHandler(handle_pagination, pattern="^(prev_page_private_categories|next_page_private_categories)$"),
+                    ],
+                    SEARCH_ITEM: [
+                        MessageHandler(filters.TEXT & ~filters.COMMAND, process_item_search),
+                        CallbackQueryHandler(select_item, pattern="^select_item_"),
+                        CallbackQueryHandler(back_to_items, pattern="^back_to_items$"),
+                        CallbackQueryHandler(handle_pagination, pattern="^(prev_page_private|next_page_private)$"),
+                    ],
+                },
+                fallbacks=[
+                    CommandHandler("cancel", cancel),
+                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$"),
+                ],
+            )
+            
+            generate_image_handler = ConversationHandler(
+                entry_points=[CallbackQueryHandler(start_generate_image, pattern="^generate_image$")],
+                states={
+                    SELECT_SIZE: [
+                        CallbackQueryHandler(select_size, pattern="^size_"),
+                        CallbackQueryHandler(retry_generate_image, pattern="^retry_generate_image$"),
+                    ],
+                    GET_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_prompt)],
+                },
+                fallbacks=[
+                    CommandHandler("cancel", cancel),
+                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$"),
+                ],
+            )
+            
+            remove_bg_handler = ConversationHandler(
+                entry_points=[CallbackQueryHandler(start_remove_bg, pattern="^remove_bg$")],
+                states={
+                    REMOVE_BG: [MessageHandler(filters.PHOTO, handle_remove_bg)],
+                },
+                fallbacks=[
+                    CommandHandler("cancel", cancel),
+                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$"),
+                ],
+            )
+            
+            # ثبت هندلرها
+            application.add_handler(CommandHandler("start", start))
+            application.add_handler(CommandHandler("cancel", cancel))
+            application.add_handler(item_search_handler)
+            application.add_handler(generate_image_handler)
+            application.add_handler(remove_bg_handler)
+            application.add_handler(InlineQueryHandler(inline_query))
+            application.add_handler(MessageHandler(filters.Regex(r"@PlatoDex\s+(.+)"), handle_inline_selection))
+            application.add_handler(CommandHandler("i", process_item_in_group))
+            application.add_handler(CommandHandler("p", generate_image_in_group))
+            application.add_handler(CallbackQueryHandler(button))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
+            application.add_handler(CommandHandler("l", show_weekly_leaderboard))
+            application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.GROUPS, detect_leaderboard_command))
+            
+            # هندلر خطا
+            application.add_error_handler(error_handler)
+            
+            # تنظیم وب‌هوک
+            logger.info(f"تنظیم وب‌هوک روی {WEBHOOK_URL}...")
+            await application.bot.set_webhook(url=WEBHOOK_URL)
+            logger.info("وب‌هوک با موفقیت تنظیم شد.")
+            
+            # برنامه‌ریزی اسکرپ آیتم‌ها
+            schedule_scraping(application)
+            await extract_items()
+            
+            # آماده‌سازی و شروع ربات
+            logger.info("در حال آماده‌سازی ربات...")
+            await application.initialize()
+            logger.info("در حال شروع ربات...")
+            await application.start()
+            
+            # اجرای سرور
+            port = int(os.getenv("PORT", 8000))
+            logger.info(f"اجرای uvicorn روی پورت {port}...")
+            config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level="info")
+            server = uvicorn.Server(config)
+            await server.serve()
+            
+        except Exception as e:
+            logger.error(f"خطا در تلاش {attempt + 1}/{max_retries}: {e}")
+            if attempt < max_retries - 1:
+                logger.info(f"تلاش دوباره بعد از {retry_delay} ثانیه...")
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.error("همه تلاش‌ها برای شروع ربات ناموفق بود!")
+                raise
 
 if __name__ == "__main__":
-    try:
-        logger.info("شروع ربات...")
-        port = int(os.getenv("PORT", 8000))
-        logger.info(f"اجرای uvicorn روی پورت {port}...")
-        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
-    except Exception as e:
-        logger.error(f"خطا در اجرای ربات: {e}")
-        raise SystemExit(1)
+    asyncio.run(main())

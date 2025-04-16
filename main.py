@@ -1525,10 +1525,11 @@ def main():
     schedule_scraping(application)
     
     # تنظیم وب‌هوک
-    logger.info("در حال تنظیم وب‌هوک...")
+    port = int(os.getenv("PORT", 8000))
+    logger.info(f"در حال تنظیم وب‌هوک روی پورت {port}...")
     application.run_webhook(
         listen="0.0.0.0",
-        port=int(os.getenv("PORT", 8000)),
+        port=port,
         url_path="/webhook",
         webhook_url=WEBHOOK_URL,
     )
@@ -1538,7 +1539,7 @@ if __name__ == "__main__":
         logger.info("شروع ربات...")
         port = int(os.getenv("PORT", 8000))
         logger.info(f"اجرای uvicorn روی پورت {port}...")
-        uvicorn.run(app, host="0.0.0.0", port=port)
+        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
     except Exception as e:
         logger.error(f"خطا در اجرای ربات: {e}")
         raise SystemExit(1)

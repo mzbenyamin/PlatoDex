@@ -1537,8 +1537,8 @@ if __name__ == "__main__":
     try:
         logger.info("شروع ربات...")
         port = int(os.getenv("PORT", 8000))
-logger.info(f"اجرای uvicorn روی پورت {port}...")
-uvicorn.run(app, host="0.0.0.0", port=port)
+        logger.info(f"اجرای uvicorn روی پورت {port}...")
+        uvicorn.run(app, host="0.0.0.0", port=port)
     except Exception as e:
         logger.error(f"خطا در اجرای ربات: {e}")
         raise SystemExit(1)

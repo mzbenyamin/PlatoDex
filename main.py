@@ -15,7 +15,7 @@ import io
 import tempfile
 import os
 from threading import Lock
-import random  # برای تولید seed تصادفی
+import random
 
 # تنظیم لاگ
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -80,23 +80,92 @@ def clean_text(text):
             text = text.replace(ad_text, "").strip()
     return text.strip()
 
-# توابع اسکرپ لیدربرد و پروفایل (بدون تغییر)
-def scrape_leaderboard():
-    # ... (مانند کد قبلی، بدون تغییر)
-    return leaderboard_data[:10]
-
-def scrape_profile(player_link):
-    # ... (مانند کد قبلی، بدون تغییر)
-    return games_data
-
+# تابع اسکرپ آیتم‌ها (اصلاح‌شده با لاگ و مدیریت خطا)
 async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
     global EXTRACTED_ITEMS
     EXTRACTED_ITEMS = []
     max_retries = 3
     retry_delay = 5
-    # ... (مانند کد قبلی، بدون تغییر)
-    logger.info(f"تعداد آیتم‌ها: {len(EXTRACTED_ITEMS)}")
-    return
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"تلاش {attempt + 1} برای اسکرپ آیتم‌ها از {URL}")
+            response = requests.get(URL, headers=headers, timeout=20)
+            logger.info(f"وضعیت پاسخ: {response.status_code}")
+            
+            if response.status_code != 200:
+                logger.error(f"خطا در درخواست HTTP: {response.status_code}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                continue
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            script_tag = soup.find('script', string=re.compile('window\\.__PRELOADED_STATE__'))
+            if not script_tag:
+                logger.error("تگ اسکریپت با __PRELOADED_STATE__ پیدا نشد!")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                continue
+            
+            script_content = script_tag.string
+            json_match = re.search(r'window\.__PRELOADED_STATE__\s*=\s*(\{.*?\});', script_content, re.DOTALL)
+            if not json_match:
+                logger.error("داده JSON پیدا نشد!")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+                continue
+            
+            json_data = json.loads(json_match.group(1))
+            items_data = json_data.get('items', {}).get('items', [])
+            logger.info(f"تعداد آیتم‌های خام پیدا شده: {len(items_data)}")
+            
+            for item in items_data:
+                try:
+                    images = []
+                    for img in item.get('images', []):
+                        img_url = img.get('uri', '')
+                        if img_url and not img_url.startswith('http'):
+                            img_url = BASE_IMAGE_URL + img_url
+                        images.append(img_url)
+                    
+                    audios = item.get('audios', []) or []
+                    price = item.get('price', {})
+                    price_value = price.get('value', 0)
+                    price_type = price.get('type', 'unknown')
+                    
+                    extracted_item = {
+                        'id': str(item.get('id', '')),
+                        'name': item.get('name', 'Unknown'),
+                        'category': item.get('category', 'Uncategorized'),
+                        'description': item.get('description', 'بدون توضیحات'),
+                        'images': images,
+                        'audios': audios,
+                        'price': {
+                            'value': price_value,
+                            'type': price_type
+                        }
+                    }
+                    EXTRACTED_ITEMS.append(extracted_item)
+                except Exception as e:
+                    logger.error(f"خطا در پردازش آیتم {item.get('name', 'Unknown')}: {e}")
+            
+            logger.info(f"تعداد آیتم‌های اسکرپ شده: {len(EXTRACTED_ITEMS)}")
+            if EXTRACTED_ITEMS:
+                return
+            else:
+                logger.warning("هیچ آیتمی اسکرپ نشد!")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+        
+        except Exception as e:
+            logger.error(f"خطا در اسکرپ آیتم‌ها (تلاش {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(retry_delay)
+    
+    logger.error("اسکرپ آیتم‌ها بعد از تمام تلاش‌ها ناموفق بود!")
 
 def schedule_scraping(app: Application):
     if app.job_queue is None:
@@ -104,6 +173,7 @@ def schedule_scraping(app: Application):
         raise RuntimeError("JobQueue فعال نیست!")
     app.job_queue.run_repeating(extract_items, interval=12*60*60, first=0)
 
+# توابع دیگر (بدون تغییر، فقط برای تکمیل)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in AI_CHAT_USERS:
@@ -169,7 +239,7 @@ async def get_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     width = context.user_data["width"]
     height = context.user_data["height"]
-    seed = random.randint(1, 1000000)  # تولید seed تصادفی
+    seed = random.randint(1, 1000000)
     
     loading_message = await update.message.reply_text(clean_text("🖌️ در حال طراحی عکس... لطفاً صبر کنید."))
     
@@ -214,6 +284,7 @@ async def retry_generate_image(update: Update, context: ContextTypes.DEFAULT_TYP
     )
     return SELECT_SIZE
 
+# تابع تولید تصویر گروه (اصلاح‌شده)
 async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_id = update.message.message_id
     with PROCESSING_LOCK:
@@ -229,7 +300,7 @@ async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             clean_text("لطفاً یه توضیح برای تصویر بنویس به انگلیسی! مثلاً:\n/p A flying car"),
             message_thread_id=thread_id
         )
-        return GET_GROUP_PROMPT
+        return ConversationHandler.END  # پایان مکالمه اگر پرامپت نباشه
     
     prompt = " ".join(context.args).strip()
     if not prompt:
@@ -237,14 +308,14 @@ async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             clean_text("لطفاً یه توضیح برای تصویر بنویس به انگلیسی! مثلاً:\n/p A flying car"),
             message_thread_id=thread_id
         )
-        return GET_GROUP_PROMPT
+        return ConversationHandler.END
     
     loading_message = await update.message.reply_text(
         clean_text("🖌️ در حال طراحی عکس... لطفاً صبر کنید."),
         message_thread_id=thread_id
     )
     
-    seed = random.randint(1, 1000000)  # تولید seed تصادفی
+    seed = random.randint(1, 1000000)
     api_url = f"{IMAGE_API_URL}{prompt}?width=2048&height=2048&nologo=true&seed={seed}"
     try:
         response = requests.get(api_url, timeout=30)
@@ -260,6 +331,7 @@ async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_to_message_id=update.message.message_id
             )
             context.user_data["last_image_message_id"] = message.message_id
+            context.user_data["original_message_id"] = update.message.message_id
         else:
             await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
             await update.message.reply_text(
@@ -276,63 +348,11 @@ async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     return ConversationHandler.END
 
-async def get_group_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message_id = update.message.message_id
-    with PROCESSING_LOCK:
-        if message_id in PROCESSED_MESSAGES:
-            logger.warning(f"پیام تکراری در گروه با message_id: {message_id} - نادیده گرفته شد")
-            return GET_GROUP_PROMPT
-        PROCESSED_MESSAGES.add(message_id)
-    
-    prompt = update.message.text.strip()
-    if not prompt:
-        await update.message.reply_text(
-            clean_text("لطفاً یه توضیح برای تصویر بنویس به انگلیسی! مثلاً:\n/p A flying car")
-        )
-        return GET_GROUP_PROMPT
-    
-    thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
-    
-    loading_message = await update.message.reply_text(
-        clean_text("🖌️ در حال طراحی عکس... لطفاً صبر کنید."),
-        message_thread_id=thread_id
-    )
-    
-    seed = random.randint(1, 1000000)  # تولید seed تصادفی
-    api_url = f"{IMAGE_API_URL}{prompt}?width=2048&height=2048&nologo=true&seed={seed}"
-    try:
-        response = requests.get(api_url, timeout=30)
-        if response.status_code == 200:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
-            keyboard = [[InlineKeyboardButton("🔄 تولید مجدد تصویر", callback_data=f"regenerate_image_{prompt}")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            message = await update.message.reply_photo(
-                photo=response.content,
-                caption=clean_text(f"🖼 پرامپ تصویر: {prompt}"),
-                reply_markup=reply_markup,
-                message_thread_id=thread_id,
-                reply_to_message_id=update.message.message_id
-            )
-            context.user_data["last_image_message_id"] = message.message_id
-        else:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
-            await update.message.reply_text(
-                clean_text("مشکلی در تولید تصویر پیش آمد. لطفاً دوباره امتحان کنید."),
-                message_thread_id=thread_id
-            )
-    except Exception as e:
-        await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
-        await update.message.reply_text(
-            clean_text("خطایی رخ داد. لطفاً بعداً امتحان کنید."),
-            message_thread_id=thread_id
-        )
-        logger.error(f"خطا در تولید تصویر گروه: {e}")
-    
-    return ConversationHandler.END
-
+# تابع تولید مجدد تصویر (اصلاح‌شده)
 async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    logger.info("دکمه تولید مجدد تصویر کلیک شد!")
     
     prompt = query.data.replace("regenerate_image_", "")
     thread_id = query.message.message_thread_id if hasattr(query.message, 'is_topic_message') and query.message.is_topic_message else None
@@ -343,18 +363,19 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
     if last_image_message_id:
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=last_image_message_id)
+            logger.info(f"تصویر قبلی با ID {last_image_message_id} حذف شد.")
         except Exception as e:
             logger.error(f"خطا در حذف تصویر قبلی: {e}")
     
-    # ارسال پیام در حال طراحی مجدد
+    # ارسال پیام در حال طراحی
     loading_message = await context.bot.send_message(
         chat_id=chat_id,
         text=clean_text("🖌️ در حال طراحی مجدد عکس... لطفاً صبر کنید."),
         message_thread_id=thread_id
     )
     
-    # تولید تصویر جدید با seed جدید
-    seed = random.randint(1, 1000000)  # seed تصادفی جدید
+    # تولید تصویر جدید
+    seed = random.randint(1, 1000000)
     api_url = f"{IMAGE_API_URL}{prompt}?width=2048&height=2048&nologo=true&seed={seed}"
     try:
         response = requests.get(api_url, timeout=30)
@@ -362,7 +383,6 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
             await context.bot.delete_message(chat_id=chat_id, message_id=loading_message.message_id)
             keyboard = [[InlineKeyboardButton("🔄 تولید مجدد تصویر", callback_data=f"regenerate_image_{prompt}")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
-            # پیدا کردن پیام اصلی کاربر برای ریپلای
             original_message_id = context.user_data.get("original_message_id", query.message.reply_to_message.message_id)
             message = await context.bot.send_photo(
                 chat_id=chat_id,
@@ -373,6 +393,7 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
                 reply_to_message_id=original_message_id
             )
             context.user_data["last_image_message_id"] = message.message_id
+            logger.info("تصویر جدید با موفقیت ارسال شد.")
         else:
             await context.bot.delete_message(chat_id=chat_id, message_id=loading_message.message_id)
             await context.bot.send_message(
@@ -380,6 +401,7 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
                 text=clean_text("مشکلی در تولید تصویر پیش آمد. لطفاً دوباره امتحان کنید."),
                 message_thread_id=thread_id
             )
+            logger.error(f"خطای API: وضعیت {response.status_code}")
     except Exception as e:
         await context.bot.delete_message(chat_id=chat_id, message_id=loading_message.message_id)
         await context.bot.send_message(
@@ -459,6 +481,10 @@ async def start_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     context.user_data.clear()
+    if not EXTRACTED_ITEMS:
+        await query.edit_message_text(clean_text("هیچ آیتمی پیدا نشد! لطفاً بعداً امتحان کنید. 😕"))
+        return ConversationHandler.END
+    
     categories = sorted(set(item["category"] for item in EXTRACTED_ITEMS))
     context.user_data["categories"] = categories
     context.user_data["page"] = 0
@@ -698,6 +724,13 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
     
     thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
     
+    if not EXTRACTED_ITEMS:
+        await update.message.reply_text(
+            clean_text("هیچ آیتمی پیدا نشد! لطفاً بعداً امتحان کنید. 😕"),
+            message_thread_id=thread_id
+        )
+        return
+    
     if not context.args:
         categories = sorted(set(item["category"] for item in EXTRACTED_ITEMS))
         context.user_data["categories"] = categories
@@ -721,6 +754,17 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def send_paginated_categories(update: Update, context: ContextTypes.DEFAULT_TYPE, is_group=False):
     categories = context.user_data.get("categories", sorted(set(item["category"] for item in EXTRACTED_ITEMS)))
+    if not categories:
+        message_text = clean_text("هیچ دسته‌بندی‌ای پیدا نشد! 😕")
+        if is_group and update.message:
+            thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
+            await update.message.reply_text(message_text, message_thread_id=thread_id)
+        elif update.callback_query:
+            await update.callback_query.edit_message_text(message_text)
+        else:
+            await update.message.reply_text(message_text)
+        return
+    
     page = context.user_data.get("page", 0)
     items_per_page = 10
     total_pages = (len(categories) + items_per_page - 1) // items_per_page
@@ -1311,11 +1355,7 @@ async def main():
             
             group_image_conv_handler = ConversationHandler(
                 entry_points=[CommandHandler("p", start_group_image)],
-                states={
-                    GET_GROUP_PROMPT: [
-                        MessageHandler(filters.TEXT & ~filters.COMMAND, get_group_prompt),
-                    ]
-                },
+                states={},
                 fallbacks=[
                     CommandHandler("cancel", cancel),
                     CommandHandler("start", start),

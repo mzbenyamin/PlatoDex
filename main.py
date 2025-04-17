@@ -583,7 +583,7 @@ async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         logger.error(f"خطا در تولید تصویر گروه: {e}")
 
-async inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.inline_query.query
     if not query:
         await update.inline_query.answer([])

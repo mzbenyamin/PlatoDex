@@ -1161,7 +1161,7 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     user_history = context.user_data.get("group_chat_history", [])
     
     should_reply = (
-        "ربات" in user_message or "پلاتو" in user_message or
+        "ربات" in user_message or "پلاتو" in user_message or "سلام" in user_message or "خداحافظ" in user_message or
         (replied_message and replied_message.from_user.id == context.bot.id)
     )
     

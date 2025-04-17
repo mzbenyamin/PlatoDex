@@ -272,7 +272,12 @@ async def select_size(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["width"] = 1280
         context.user_data["height"] = 720
     keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
-    reply_markup = InlineKeyboard szervezet
+    reply_markup = InlineKeyboardMarkup(keyboard)  # اصلاح خطا: استفاده از InlineKeyboardMarkup
+    await query.edit_message_text(
+        clean_text("📝 حالا یه توضیح (پرامپت) به انگلیسی برای تصویر بنویس! مثلاً: A flying car"),
+        reply_markup=reply_markup
+    )
+    return GET_PROMPT
 
 async def get_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = update.message.text.strip()

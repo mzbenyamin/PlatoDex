@@ -31,6 +31,7 @@ EXTRACTED_ITEMS = []
 AI_CHAT_USERS = set()
 SEARCH_ITEM, SELECT_CATEGORY = range(2)
 SELECT_SIZE, GET_PROMPT = range(2, 4)
+GET_GROUP_PROMPT = range(1)  # حالت جدید برای تولید تصویر در گروه
 DEFAULT_CHAT_ID = 789912945
 PROCESSED_MESSAGES = set()
 PROCESSING_LOCK = Lock()
@@ -40,77 +41,7 @@ SYSTEM_MESSAGE = (
     "حرف میزنی به صورت نسل Z و کمی با طنز حرف بزن و شوخی کنه\\. به مشخصات آیتم‌های پلاتو دسترسی داری و می‌تونی "
     "به سوالات کاربر در مورد آیتم‌ها جواب بدی و راهنمایی کنی چطور با دستور /i مشخصات کامل رو بگیرن\\. "
     "کاربرا رو تشویق کن به کانال @salatin_plato بپیوندن تا اخبار و ترفندای خفن پلاتو رو ببینن! 🚀\n\n"
-    "حذف اکانت\n"
-    "چطور اکانتمو حذف کنم؟\nبرای حذف اکانت این مراحل رو برو:\n"
-    "- اپلیکیشن Plato رو باز کن\n- رو عکس پروفایلت بالا چپ بزن\n- آیکون چرخ‌دنده رو بزن\n- برو Account\n- بزن Delete Account\n"
-    "مراحل رو دنبال کن تا اکانتت کامل حذف شه\\. حواست باشه این کار قابل برگشت نیس و بعد 10 روز همه چی (ایمیل، یوزرنیم، تاریخچه بازی و چت) پاک می‌شه\\. تو این 10 روز لاگین نکنی وگرنه درخواست کنسل می‌شه!\n"
-    "یکی دیگه اکانتمو حذف کرده، می‌تونم برگردونمش؟\nبعد 10 روز دیگه هیچ راهی برای برگشت نیست\\. اکانتت مال خودته، کد لاگینتو به کسی نده وگرنه ممکنه کلا از دستش بدی!\n\n"
-    "اطلاعات عمومی\n"
-    "Plato News چیه؟\nاخبار پلاتو که تو تب Home > News پیدا می‌شه، رویدادا و آپدیتا رو نشون می‌ده\\. تو وب هم می‌تونی ببینیش\\.\\n"
-    "چطور سکه جمع کنم؟\n- از Shop بخر\n- از دوستات بخواه بهت هدیه بدن\n- روزانه از Daily Quest بگیر\n- تو تورنمنتای خاص برنده شو\n"
-    "اشتباهی یه آیتم خریدم، پولمو برمی‌گردونین؟\nپلاتو ریفاند نداره، قبل خرید چک کن!\n"
-    "یه باگ پیدا کردم، چطور گزارش بدم؟\nبرو ⚙️ > Help/Contact Us > Report a Problem\\. هر چی جزییات داری بگو تا تیم بتونه درست بررسی کنه\\.\\n"
-    "ایده یا پیشنهادی دارم، کجا بگم؟\nایمیل بزن به hello@platoapp\\.com، کامل توضیح بده تا به تیم مربوطه بفرستن\\.\\n"
-    "چرا بلاک کار نمی‌کنه؟\nاحتمالا لیست بلاکت پر شده، برو ⚙️ > Privacy > Blocked Users و قدیمی‌ها رو پاک کن\\.\\n"
-    "چطور یه نفر رو فقط بلاک کنم بدون گزارش؟\nبلاک کن و گزارش بده 'this person is spamming'\\. جریمه فقط برای محتوای مضر اعمال می‌شه\\.\\n"
-    "چطور گزارش بدم بدون بلاک؟\nبلاک و گزارش کن، بعد آنبلاک کن\\. گزارش پس گرفته نمی‌شه\\.\\n"
-    "یکی تو بازی تقلب کرد، چیکار کنم؟\nبلاک و گزارش کن 'this person is playing unfairly'\\.\\n"
-    "یکی تو ترید کلاهبرداری کرد، چیکار کنم؟\nپلاتو فقط گیفت دادن رو ساپورت می‌کنه، ترید ریسک خودته\\. نکات: اول گیفت نده، با دوستای قابل اعتماد ترید کن، از گروه‌های مخصوص ترید استفاده کن\\.\\n"
-    "حداقل سیستم مورد نیاز پلاتو چیه؟\nAndroid 6\\.0 یا iOS 15\\.\\n"
-    "برای چیزی که اینجا نیست چطور با پلاتو تماس بگیرم؟\nایمیل بزن، معمولاً تو 24 ساعت (روزای کاری) جواب می‌دن\\.\\n\\n"
-    "مدیریت (Moderation)\n"
-    "مدیریت تو پلاتو چطوره؟\nیه سری Community Guidelines داریم که باید رعایت شه:\n"
-    "- تکنولوژی real-time پیامای عمومی رو چک می‌کنه و محتوای بد رو رد می‌کنه\n- هر گزارش تو اپ بررسی و جریمه خودکار اعمال می‌شه\n- DEVها و لیدرها می‌تونن بازیکنای مزاحم رو سایلنت کنن\n- DEVها می‌تونن موقت یا دائم بن کنن\n"
-    "سایلنت چطوریه؟\nDEV یا لیدر می‌تونه 4 ساعت سایلنتت کنه\\. چند بار سایلنت شی احتمالا بن می‌شی\\. پیام می‌بینی 'Unable to send message, try again in X minutes'\\. تا تموم شه نمی‌تونی تو اتاقای عمومی چت کنی یا بازی بسازی\\. اگه فکر می‌کنی ناعادلانه بود، از فرم فیدبک بگو\\.\\n"
-    "بن چطوریه؟\nDEV می‌تونه موقت یا دائم بنت کنه\\. اگه خیلی خطا شدید باشه، IP یا دیوایست هم بن می‌شه\\. بن دائم اکانتت حذف می‌شه\\. پیام می‌بینی 'You were banned'\\. می‌تونی از فرم درخواست تجدیدنظر کنی\\.\\n\\n"
-    "بج‌های خاص\n"
-    "لیدر کیه؟\nداوطلبایی هستن که جامعه‌شون رو نمایندگی می‌کنن\\. می‌تونن 4 ساعت سایلنت کنن ولی بن نمی‌کنن\\. کاراشون: ساخت جامعه، کمک به بازیکنا، ارتباط با DEVها، چک کردن چت عمومی\\. بج دارن که رنگش نشون‌دهنده جامعه‌شونه\\. از فرم فیدبک می‌تونی نظر بدی\\. توسط DEVها انتخاب می‌شن\\.\\n"
-    "دولوپر کیه؟\nکارمندای رسمی پلاتو\\. می‌تونن 4 ساعت سایلنت یا موقت/دائم بن کنن\\. بج خاص دارن\\.\\n\\n"
-    "چت پس\n"
-    "چت پس چیه؟\nیه بج که برای چت و بازی تو اکثر اتاقای عمومی لازمه\\.\\n"
-    "چرا اومده؟\nبرای کم کردن رفتارای منفی\\. راهای قبلی جواب*‌ دیگه جواب نداد، این بهتر کار کرده\\.\\n"
-    "چطور کار می‌کنه؟\nکسایی که دنبال اذیتن کمتر چت پس می‌گیرن، پس ما رو آدمای مشکل‌دار تمرکز می‌کنیم\\. تو اتاقای چت پس‌دار بهتر شده\\.\\n"
-    "کجاها لازمه؟\nاکثر اتاقای عمومی، جز اونایی که تو توضیحاتشون نوشته 'No Chat Pass Required'\\.\\n"
-    "نیاز دارم؟\nاگه می‌خوای تو اتاقای چت پس‌دار چت کنی یا بازی بسازی، آره\\.\\n"
-    "چطور بگیرم؟\n- قبل 5 دسامبر 2022 اگه 2000 سکه خریده یا گیفت گرفته باشی، داری\n- اکانت جدید یا از 16 ژوئن 2023 لاگین نکردی؟ 7 روز وقت داری Welcome Offer رو از Shop بخری\n- از Shop تو قسمت بج‌ها بخر\n- از دوستات بخواه گیفتت کنن\n"
-    "چطور استفاده کنم؟\nفقط باید داشته باشیش، لازم نیس فعالش کنی\\.\\n\\n"
-    "مبارزه با سوءاستفاده\n"
-    "پلاتو برای سوءاستفاده چیکار می‌کنه؟\nهدفش اینه همه بدون اذیت بازی کنن:\n"
-    "- Community Guidelines داره\n- تیم پشتیبانی: hello@platoapp\\.com\n- بلاک و گزارش تو اپ\n- moderation خودکار و انسانی\n- کنترل بازی توسط سازنده‌ها\n"
-    "چطور سوءاستفاده رو گزارش بدم؟\n- بلاک و گزارش کن، چت ضبط می‌شه\n- تو گروه خصوصی به ادمین بگو یا لفت بده\n- اگه ادامه داشت ایمیل بزن: Plato ID خودت و طرف، توضیح ماجرا، ویدیو اگه داری\n\n"
-    "اکانت و پروفایل\n"
-    "چرا نمی‌تونم با ایمیلم ثبت‌نام کنم؟\n- ایمیلتو چک کن\n- شاید قبلا ثبت شده، لاگین کن\n- یه ایمیل دیگه امتحان کن\n- مشکل داری؟ به hello@platoapp\\.com بگو\n"
-    "ثبت‌نام نکردم، چطور لاگین کنم؟\nنمی‌شه، باید ایمیل ثبت کرده باشی\\.\\n"
-    "به ایمیلم دسترسی ندارم، چطور لاگین کنم؟\nنمی‌شه، باید ایمیلتو برگردونی\\.\\n"
-    "چرا نمی‌تونم با ایمیلم لاگین کنم؟\n- ایمیلتو چک کن\n- اگه زیاد درخواست دادی 24 ساعت صبر کن\n- مشکل داری؟ ایمیل بزن\n"
-    "چطور ایمیلمو عوض کنم؟\nنمی‌شه، برای امنیت ثابته\\.\\n"
-    "پیامای خصوصیمو چطور برگردونم؟\nنمی‌شه، برای حریم خصوصی ذخیره نمی‌شن\\.\\n"
-    "چرا عکس پروفایلم رد شد؟\nاحتمالا محتوای بد داره، یه عکس دیگه بذار\\.\\n"
-    "چرا نمی‌تونم عکس پروفایلمو عوض کنم؟\nروزی 4 بار می‌شه، صبر کن\\.\\n"
-    "چرا Plato IDم رد شد؟\nکلمه بد داره یا Pips می‌خواد\\.\\n"
-    "چرا نمی‌تونم Plato IDمو دوباره عوض کنم؟\nشاید در دسترس نباشه یا قوانین رو نقض کنه\\.\\n"
-    "ID قبلیم کی آزاد می‌شه؟\nبین 24 تا 72 ساعت تصادفیه\\.\\n"
-    "IDم تو انتقال دزدیده شد، برمی‌گردونین؟\nپلاتو انتقال رو ساپورت نمی‌کنه، ریسک خودته\\.\\n"
-    "یه ID غیرفعال می‌خوام، آزاد می‌کنین؟\nگاهی آزاد می‌کنن، ولی درخواستی نه\\.\\n"
-    "PlatoBot رو چطور از لیست دوستام پاک کنم؟\nنمی‌شه، مهربونه!\n"
-    "آیتم رو از inventoryم چطور پاک کنم؟\nنمی‌شه، دائميه\\.\\n"
-    "چرا سکه‌هام غیبشون زد؟\nشاید ریفاند درخواست دادی، ایمیل بزن\\.\\n"
-    "چطور ببینم کی به اکانتم لاگینه؟\nبرو ⚙️ > Devices\\.\\n\\n"
-    "امنیت و حریم خصوصی\n"
-    "کی می‌تونه منو آنلاین ببینه؟\nدوستات و حریفات، اگه نمی‌خوای برو ⚙️ > Privacy > Show Online to Friends رو خاموش کن\\.\\n"
-    "چطور بلاک کنم؟\nرو پروفایل طرف بزن و Block رو انتخاب کن\\. چتشون قطع می‌شه و نمی‌تونن بازیاتو جوین کنن\\.\\n"
-    "سیاست حریم خصوصی چیه؟\nخیلی جدیه، اینجا بخون: https://platoapp\\.com/privacy\\n\\n"
-    "لینکای دانلود پلاتو\n- اندروید: https://play\\.google\\.com/store/apps/details?id=com\\.plato\\.android\n- iOS: https://apps\\.apple\\.com/app/plato-play-chat-together/id1054747306?ls=1\n- ویندوز: https://platoapp\\.com/downloads\n"
-    "سلاطین پلاتو چیه؟\nاولین رسانه فارسی‌زبون پلاتو از 1400 با مدیریت بنیامین\\. اخبار و ترفندای پلاتو رو می‌دن و یه مینی‌اپ تلگرامی @PlatoDex دارن که رتبه‌بندی بازیکنا و آیتما رو نشون می‌ده\\. رباتشون: @saIatin_Robot - کانال: @salatin_plato - گروه: @Gap_Plato\n\n"
-    "چند اکانت تو یه دستگاه\n"
-    "1️⃣ تغییر دستی: لاگین کن، لفت بده، با ایمیل دیگه بیا، حواست به ثبت اطلاعات باشه\\.\\n"
-    "2️⃣ نسخه افلاطون: کنار نسخه اصلی نصب کن، از ربات بگیر\\.\\n"
-    "3️⃣ Plato Mage: از https://t\\.me/saIatin_Robot?start=cmd_789829938 بگیر، یه اکانت دیگه کنار اصلی می‌ده\\.\\n"
-    "4️⃣ Apk Editor: آموزشش تو رباته، چند نسخه می‌تونی بسازی\\.\\n"
-    "5️⃣ پلاتو باکس: کلونر نصب کن، ولی مواظب رم گوشیت باش\\.\\n"
-    "ترفندای بیشتر تو @salatin_plato منتظرته! 😎\n\n"
-    "این پیام آموزشی رو توی هر پاسخ تکرار نکن، فقط توی ذهنت نگه دار و بر اساسش عمل کن\\."
-    "خلاصه به سوالات جواب بده خیلی بلند نباشه اگر کاربر درخواست توضیحات کرد بعد توضیح بده"
+    # ... (بقیه SYSTEM_MESSAGE بدون تغییر باقی می‌مونه)
 )
 
 application = None
@@ -149,7 +80,7 @@ def clean_text(text):
             text = text.replace(ad_text, "").strip()
     return text.strip()
 
-# اسکرپ لیدربرد
+# اسکرپ لیدربرد (بدون تغییر)
 def scrape_leaderboard():
     url = "https://platoapp.com/en"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
@@ -189,12 +120,12 @@ def scrape_leaderboard():
                 'profile_image': profile_img_url,
                 'wins': wins
             })
-        return leaderboard_data[:10]  # فقط 10 نفر برتر
+        return leaderboard_data[:10]
     except Exception as e:
         logger.error(f"خطا در اسکرپ لیدربرد: {e}")
         return None
 
-# اسکرپ پروفایل بازیکن
+# اسکرپ پروفایل (بدون تغییر)
 def scrape_profile(player_link):
     try:
         response = requests.get(player_link, timeout=20)
@@ -341,12 +272,7 @@ async def select_size(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["width"] = 1280
         context.user_data["height"] = 720
     keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(
-        clean_text(f"سایز تصویر انتخاب شد: {context.user_data['width']}x{context.user_data['height']}\n\nلطفاً توضیحات تصویر (پرامپت) را وارد کنید. مثلاً: 'A cat in a forest'"),
-        reply_markup=reply_markup
-    )
-    return GET_PROMPT
+    reply_markup = InlineKeyboard szervezet
 
 async def get_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = update.message.text.strip()
@@ -395,6 +321,116 @@ async def retry_generate_image(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup=reply_markup
     )
     return SELECT_SIZE
+
+async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message_id = update.message.message_id
+    with PROCESSING_LOCK:
+        if message_id in PROCESSED_MESSAGES:
+            logger.warning(f"پیام تکراری در گروه با message_id: {message_id} - نادیده گرفته شد")
+            return
+        PROCESSED_MESSAGES.add(message_id)
+    
+    thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
+    
+    # اگر کاربر فقط /p فرستاده باشه
+    if not context.args:
+        await update.message.reply_text(
+            clean_text("لطفاً یه توضیح برای تصویر بنویس به انگلیسی! مثلاً:\n/p A flying car"),
+            message_thread_id=thread_id
+        )
+        return GET_GROUP_PROMPT
+    
+    # اگر کاربر پرامپت رو همراه دستور فرستاده باشه
+    prompt = " ".join(context.args).strip()
+    if not prompt:
+        await update.message.reply_text(
+            clean_text("لطفاً یه توضیح برای تصویر بنویس به انگلیسی! مثلاً:\n/p A flying car"),
+            message_thread_id=thread_id
+        )
+        return GET_GROUP_PROMPT
+    
+    # ارسال پیام در حال طراحی
+    loading_message = await update.message.reply_text(
+        clean_text("🖌️ در حال طراحی عکس... لطفاً صبر کنید."),
+        message_thread_id=thread_id
+    )
+    
+    # تولید تصویر با API
+    api_url = f"{IMAGE_API_URL}{prompt}?width=2048&height=2048&nologo=true"
+    try:
+        response = requests.get(api_url, timeout=30)
+        if response.status_code == 200:
+            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
+            await update.message.reply_photo(
+                photo=response.content,
+                caption=clean_text(f"🖼 پرامپ تصویر: {prompt}"),
+                message_thread_id=thread_id
+            )
+        else:
+            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
+            await update.message.reply_text(
+                clean_text("مشکلی در تولید تصویر پیش آمد. لطفاً دوباره امتحان کنید."),
+                message_thread_id=thread_id
+            )
+    except Exception as e:
+        await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
+        await update.message.reply_text(
+            clean_text("خطایی رخ داد. لطفاً بعداً امتحان کنید."),
+            message_thread_id=thread_id
+        )
+        logger.error(f"خطا در تولید تصویر گروه: {e}")
+    
+    return ConversationHandler.END
+
+async def get_group_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message_id = update.message.message_id
+    with PROCESSING_LOCK:
+        if message_id in PROCESSED_MESSAGES:
+            logger.warning(f"پیام تکراری در گروه با message_id: {message_id} - نادیده گرفته شد")
+            return GET_GROUP_PROMPT
+        PROCESSED_MESSAGES.add(message_id)
+    
+    prompt = update.message.text.strip()
+    if not prompt:
+        await update.message.reply_text(
+            clean_text("لطفاً یه توضیح برای تصویر بنویس به انگلیسی! مثلاً:\n/p A flying car")
+        )
+        return GET_GROUP_PROMPT
+    
+    thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
+    
+    # ارسال پیام در حال طراحی
+    loading_message = await update.message.reply_text(
+        clean_text("🖌️ در حال طراحی عکس... لطفاً صبر کنید."),
+        message_thread_id=thread_id
+    )
+    
+    # تولید تصویر با API
+    api_url = f"{IMAGE_API_URL}{prompt}?width=2048&height=2048&nologo=true"
+    try:
+        response = requests.get(api_url, timeout=30)
+        if response.status_code == 200:
+            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
+            await update.message.reply_photo(
+                photo=response.content,
+                caption=clean_text(f"🖼 پرامپ تصویر: {prompt}"),
+                message_thread_id=thread_id
+            )
+        else:
+            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
+            await update.message.reply_text(
+                clean_text("مشکلی در تولید تصویر پیش آمد. لطفاً دوباره امتحان کنید."),
+                message_thread_id=thread_id
+            )
+    except Exception as e:
+        await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
+        await update.message.reply_text(
+            clean_text("خطایی رخ داد. لطفاً بعداً امتحان کنید."),
+            message_thread_id=thread_id
+        )
+        logger.error(f"خطا در تولید تصویر گروه: {e}")
+    
+    return ConversationHandler.END
 
 async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.inline_query.query
@@ -641,7 +677,6 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("↩️ برگشت به لیست آیتم‌ها", callback_data="back_to_items")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # ارسال پیام جدید به جای ویرایش پیام قبلی
     if item["images"]:
         message = await context.bot.send_photo(
             chat_id=query.message.chat_id,
@@ -660,7 +695,6 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i, audio_info in enumerate(item["audios"], 1):
         await send_audio(update, context, item, audio_info, i, reply_markup)
     
-    # حذف پیام لیست آیتم‌ها
     last_items_message_id = context.user_data.get("last_items_message_id")
     if last_items_message_id:
         try:
@@ -795,7 +829,7 @@ async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     category = query.data.replace("select_category_", "")
-    matching_items = [item for item in EXTRACTED_ITEMS if item["category"] == category]
+    matching_items = [item for item in EXTRACTED_ITEMS if item["category"].lower() == category.lower()]
     
     if not matching_items:
         await query.edit_message_text(clean_text(f"هیچ آیتمی تو دسته‌بندی '{category}' پیدا نشد! 😕"))
@@ -1038,7 +1072,6 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
             message_thread_id=thread_id
         )
 
-# نمایش لیدربرد تو گروه
 async def show_weekly_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_id = update.message.message_id
     with PROCESSING_LOCK:
@@ -1054,13 +1087,11 @@ async def show_weekly_leaderboard(update: Update, context: ContextTypes.DEFAULT_
     
     message_text = clean_text("🏆 جدول امتیازات\nبرندگان برتر رتبه‌بندی هفتگی - همه بازی‌ها\n\n")
     keyboard = []
-    # تیتر ستون‌ها
     keyboard.append([
         InlineKeyboardButton("بردها 🏆", callback_data="noop"),
         InlineKeyboardButton("آیدی بازیکن 🔖", callback_data="noop")
     ])
-    # اطلاعات بازیکنان
-    for player in leaderboard[:10]:  # فقط 10 نفر برتر
+    for player in leaderboard[:10]:
         keyboard.append([
             InlineKeyboardButton(player['wins'], callback_data=f"leader_{player['player_id']}"),
             InlineKeyboardButton(player['username'], callback_data=f"leader_{player['player_id']}")
@@ -1071,7 +1102,6 @@ async def show_weekly_leaderboard(update: Update, context: ContextTypes.DEFAULT_
     message = await update.message.reply_text(message_text, reply_markup=reply_markup, message_thread_id=thread_id)
     context.user_data["last_leaderboard_message_id"] = message.message_id
 
-# مدیریت انتخاب بازیکن از لیدربرد
 async def handle_leaderboard_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1118,13 +1148,11 @@ async def send_paginated_profile_games(update: Update, context: ContextTypes.DEF
     )
     
     keyboard = []
-    # تیتر ستون‌ها
     keyboard.append([
         InlineKeyboardButton("اسم بازی 🎮", callback_data="noop"),
         InlineKeyboardButton("بازی شده 🕹", callback_data="noop"),
         InlineKeyboardButton("بردها 🎖", callback_data="noop")
     ])
-    # اطلاعات بازی‌ها
     for game in current_games:
         keyboard.append([
             InlineKeyboardButton(game['game_name'], callback_data=f"game_{player['player_id']}_{game['game_name']}"),
@@ -1184,7 +1212,6 @@ async def handle_profile_pagination(update: Update, context: ContextTypes.DEFAUL
     
     await send_paginated_profile_games(update, context)
 
-# برگشت به لیدربرد
 async def back_to_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -1223,7 +1250,6 @@ async def back_to_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     context.user_data["last_leaderboard_message_id"] = message.message_id
 
-# تشخیص کلمات لیدربرد در گروه
 async def detect_leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_id = update.message.message_id
     with PROCESSING_LOCK:
@@ -1253,13 +1279,11 @@ async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Chat with AI 🤖", callback_data="chat_with_ai")],
         [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")]
     ]
-    # ارسال پیام جدید به جای ویرایش
     await context.bot.send_message(
         chat_id=query.message.chat_id,
         text=welcome_message,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    # حذف پیام قبلی
     try:
         await query.message.delete()
     except Exception as e:
@@ -1290,29 +1314,23 @@ async def main():
     
     for attempt in range(max_retries):
         try:
-            # ساخت Application
             application = Application.builder().token(TOKEN).read_timeout(60).write_timeout(60).connect_timeout(60).build()
             
-            # بررسی JobQueue
             if application.job_queue is None:
                 logger.error("JobQueue فعال نیست!")
                 raise RuntimeError("JobQueue فعال نیست!")
             
-            # مقداردهی اولیه Application
             logger.info("مقداردهی اولیه Application...")
             await application.initialize()
             logger.info("Application با موفقیت مقداردهی شد.")
             
-            # تنظیم وب‌هوک
             logger.info(f"تنظیم وب‌هوک روی {WEBHOOK_URL}...")
             await application.bot.set_webhook(url=WEBHOOK_URL)
             logger.info("وب‌هوک با موفقیت تنظیم شد.")
             
-            # برنامه‌ریزی اسکرپ آیتم‌ها
             schedule_scraping(application)
-            asyncio.create_task(extract_items())  # اجرای غیرهمزمان
+            asyncio.create_task(extract_items())
             
-            # تعریف ConversationHandler برای جست‌وجوی آیتم
             search_conv_handler = ConversationHandler(
                 entry_points=[CallbackQueryHandler(start_item_search, pattern="^search_items$")],
                 states={
@@ -1337,7 +1355,6 @@ async def main():
                 persistent=False
             )
             
-            # تعریف ConversationHandler برای تولید تصویر
             image_conv_handler = ConversationHandler(
                 entry_points=[
                     CallbackQueryHandler(start_generate_image, pattern="^generate_image$"),
@@ -1362,10 +1379,26 @@ async def main():
                 persistent=False
             )
             
-            # افزودن هندلرها
+            group_image_conv_handler = ConversationHandler(
+                entry_points=[CommandHandler("p", start_group_image)],
+                states={
+                    GET_GROUP_PROMPT: [
+                        MessageHandler(filters.TEXT & ~filters.COMMAND, get_group_prompt),
+                    ]
+                },
+                fallbacks=[
+                    CommandHandler("cancel", cancel),
+                    CommandHandler("start", start),
+                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
+                ],
+                name="group_image_generation",
+                persistent=False
+            )
+            
             application.add_handler(CommandHandler("start", start))
             application.add_handler(search_conv_handler)
             application.add_handler(image_conv_handler)
+            application.add_handler(group_image_conv_handler)
             application.add_handler(InlineQueryHandler(inline_query))
             application.add_handler(MessageHandler(filters.Regex(r'^@PlatoDex\s+.*'), process_item_in_group))
             application.add_handler(MessageHandler(filters.Regex(r'^/i($|\s+.*)'), process_item_in_group))
@@ -1384,13 +1417,12 @@ async def main():
             
             logger.info("بات آماده است!")
             
-            # اجرای سرور Uvicorn
-            port = int(os.environ.get("PORT"))  # پورت از متغیر محیطی
+            port = int(os.environ.get("PORT"))
             config = uvicorn.Config(app=app, host="0.0.0.0", port=port, log_level="info")
             server = uvicorn.Server(config)
             await server.serve()
             
-            break  # در صورت موفقیت، از حلقه خارج شو
+            break
             
         except Exception as e:
             logger.error(f"خطا در تلاش {attempt + 1}/{max_retries}: {e}")

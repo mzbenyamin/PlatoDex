@@ -475,13 +475,13 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
         response = requests.get(api_url, timeout=30)
         if response.status_code == 200:
             await context.bot.delete_message(chat_id=chat_id, message_id=loading_message.message_id)
-            keyboard = [[InlineKeyboardButton("🔄 تولید مجدد تصویر", callback_data=f"regenerate_image_{prompt}")]]
+            keyboard = [[InlineKeyboardButton("🔄 طراحی مجدد تصویر", callback_data=f"regenerate_image_{prompt}")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             original_message_id = context.user_data.get("original_message_id", query.message.reply_to_message.message_id)
             message = await context.bot.send_photo(
                 chat_id=chat_id,
                 photo=response.content,
-                caption=clean_text(f"🪄 پرامت تصویر ایجاد شده:\n\n{prompt}\n@PlatoDex"),
+                caption=clean_text(f"🪄 پرامت تصویر ایجاد شده شما:\n\n{prompt}\n\n@PlatoDex"),
                 reply_markup=reply_markup,
                 message_thread_id=thread_id,
                 reply_to_message_id=original_message_id
@@ -556,12 +556,12 @@ async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = requests.get(api_url, timeout=30)
         if response.status_code == 200:
             await context.bot.delete_message(chat_id=chat_id, message_id=loading_message.message_id)
-            keyboard = [[InlineKeyboardButton("🔄 تولید مجدد تصویر", callback_data=f"regenerate_image_{prompt}")]]
+            keyboard = [[InlineKeyboardButton("🔄 طراحی مجدد تصویر", callback_data=f"regenerate_image_{prompt}")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             message = await context.bot.send_photo(
                 chat_id=chat_id,
                 photo=response.content,
-                caption=clean_text(f"🪄 پرامت تصویر ایجاد شده:\n\n{prompt}\n@PlatoDex"),
+                caption=clean_text(f"🪄 پرامت تصویر ایجاد شده شما:\n\n{prompt}\n\n@PlatoDex"),
                 reply_markup=reply_markup,
                 message_thread_id=thread_id,
                 reply_to_message_id=update.message.message_id

@@ -1290,12 +1290,20 @@ async def main():
     
     for attempt in range(max_retries):
         try:
+            # ساخت Application
             application = Application.builder().token(TOKEN).read_timeout(60).write_timeout(60).connect_timeout(60).build()
             
+            # بررسی JobQueue
             if application.job_queue is None:
                 logger.error("JobQueue فعال نیست!")
                 raise RuntimeError("JobQueue فعال نیست!")
             
+            # مقداردهی اولیه Application
+            logger.info("مقداردهی اولیه Application...")
+            await application.initialize()
+            logger.info("Application با موفقیت مقداردهی شد.")
+            
+            # تنظیم وب‌هوک
             logger.info(f"تنظیم وب‌هوک روی {WEBHOOK_URL}...")
             await application.bot.set_webhook(url=WEBHOOK_URL)
             logger.info("وب‌هوک با موفقیت تنظیم شد.")
@@ -1304,6 +1312,7 @@ async def main():
             schedule_scraping(application)
             asyncio.create_task(extract_items())  # اجرای غیرهمزمان
             
+            # تعریف ConversationHandler برای جست‌وجوی آیتم
             search_conv_handler = ConversationHandler(
                 entry_points=[CallbackQueryHandler(start_item_search, pattern="^search_items$")],
                 states={
@@ -1328,6 +1337,7 @@ async def main():
                 persistent=False
             )
             
+            # تعریف ConversationHandler برای تولید تصویر
             image_conv_handler = ConversationHandler(
                 entry_points=[
                     CallbackQueryHandler(start_generate_image, pattern="^generate_image$"),
@@ -1352,6 +1362,7 @@ async def main():
                 persistent=False
             )
             
+            # افزودن هندلرها
             application.add_handler(CommandHandler("start", start))
             application.add_handler(search_conv_handler)
             application.add_handler(image_conv_handler)

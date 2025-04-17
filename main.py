@@ -533,7 +533,10 @@ async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     if not context.args:
         await update.message.reply_text(
-            clean_text("لطفاً یه پرامپت برای تصویر وارد کن! مثلاً: /p A flying car"),
+            clean_text(
+            "🖌️ لطفاً متنی که میخوای به عکس تبدیل بشه رو به انگلیسی بفرست!\n\n"
+            "برای مثال مثلا:\n/p a woman"
+        ),
             message_thread_id=thread_id
         )
         return

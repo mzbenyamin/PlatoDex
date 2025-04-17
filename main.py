@@ -481,7 +481,7 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
             message = await context.bot.send_photo(
                 chat_id=chat_id,
                 photo=response.content,
-                caption=clean_text(f"🖼 پرامپ تصویر: {prompt}"),
+                caption=clean_text(f"🖼 پرامپ تصویر:/n {prompt}"),
                 reply_markup=reply_markup,
                 message_thread_id=thread_id,
                 reply_to_message_id=original_message_id
@@ -561,7 +561,7 @@ async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message = await context.bot.send_photo(
                 chat_id=chat_id,
                 photo=response.content,
-                caption=clean_text(f"🖼 پرامپ تصویر: {prompt}"),
+                caption=clean_text(f"🖼 پرامپ تصویر:/n {prompt}"),
                 reply_markup=reply_markup,
                 message_thread_id=thread_id,
                 reply_to_message_id=update.message.message_id

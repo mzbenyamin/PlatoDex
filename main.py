@@ -1,31 +1,3 @@
-با توجه به درخواست شما، فقط منطق اسکرپ آیتم‌ها در تابع `extract_items` رو تغییر می‌دم تا با روش قبلی که تو فایل `main.py` کار می‌کرده، به‌روزرسانی بشه. کد کامل فایل `main.py` رو بدون هیچ دستکاری دیگه‌ای حفظ می‌کنم و فقط تابع `extract_items` رو اصلاح می‌کنم. همچنین، تغییرات مربوط به دکمه "تولید مجدد تصویر" که قبلاً پیشنهاد داده بودم رو تو کد اعمال می‌کنم.
-
-### تحلیل منطق اسکرپ آیتم‌ها در کد فعلی
-تو کد فعلی (`main.py`)، تابع `extract_items` این‌جوری کار می‌کنه:
-- یه درخواست HTTP به `https://platopedia.com/items` می‌فرسته.
-- HTML صفحه رو با `BeautifulSoup` پارس می‌کنه.
-- دنبال یه تگ `<script>` می‌گرده که شامل `var items = {...}` باشه.
-- داده‌های آیتم‌ها رو از این تگ استخراج و به JSON تبدیل می‌کنه.
-- از جدول HTML (`table#tool_items_table_default`) اطلاعات اضافی مثل قیمت و دسته‌بندی رو می‌گیره.
-- آیتم‌ها رو با ترکیب این داده‌ها تو لیست `EXTRACTED_ITEMS` ذخیره می‌کنه.
-
-مشکل فعلی (بر اساس لاگ‌ها):
-- خطای `تگ اسکریپت با __PRELOADED_STATE__ پیدا نشد!` نشون می‌ده که سایت احتمالاً ساختار HTMLش رو تغییر داده و دیگه داده‌ها تو `var items = {...}` یا تگ `<script>` موردنظر نیستن.
-- چون منطق قبلی کار می‌کرده، فرض می‌کنیم داده‌ها قبلاً تو یه تگ `<script>` با `window.__PRELOADED_STATE__` بودن (مشابه لاگ‌ها). پس باید این فرمت رو پیاده‌سازی کنیم.
-
-### اصلاح تابع `extract_items`
-برای اصلاح، فرض می‌کنیم داده‌ها تو یه تگ `<script>` با `window.__PRELOADED_STATE__` هستن (مثل قبل) و باید HTML رو پارس کنیم و JSON رو ازش بکشیم بیرون. اگه داده‌ها با جاوااسکریپت لود می‌شن، از `playwright` استفاده می‌کنیم تا صفحه کامل رندر بشه (مثل پیشنهاد قبلی). اما چون گفتید منطق قبلی کار می‌کرده، اول با روش ساده‌تر (فقط پارس HTML) شروع می‌کنیم و اگه لازم بود، `playwright` اضافه می‌شه.
-
-**تغییرات در تابع `extract_items`**:
-- به جای جست‌وجوی `var items = {...}`، دنبال `window.__PRELOADED_STATE__` می‌گردیم (مثل لاگ‌ها).
-- داده‌های آیتم‌ها رو از JSON استخراج می‌کنیم.
-- اگه تگ پیدا نشد، یه پیام خطا لاگ می‌کنیم و تلاش رو تکرار می‌کنیم.
-- ساختار آیتم‌ها رو مشابه کد فعلی نگه می‌داریم تا بقیه منطق برنامه به هم نریزه.
-
-### کد کامل با تغییرات
-تو کد زیر، فقط تابع `extract_items` اصلاح شده و بقیه کد بدون تغییره. همچنین، تغییرات مربوط به دکمه "تولید مجدد تصویر" (تابع `regenerate_group_image` و `group_image_conv_handler`) اضافه شده.
-
-```python
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent, InputFile
 from telegram.ext import Application, CommandHandler, ContextTypes, InlineQueryHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler
 import requests

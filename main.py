@@ -586,7 +586,7 @@ async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.inline_query.query
     if not query:
-        await update.inline_query.answer([])
+        update.inline_query.answer([])
         return
     results = []
     for item in EXTRACTED_ITEMS:

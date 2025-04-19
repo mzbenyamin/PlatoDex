@@ -389,10 +389,11 @@ async def get_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     width = context.user_data["width"]
     height = context.user_data["height"]
+    seed = random.randint(1, 999999)
     
     loading_message = await update.message.reply_text(clean_text("🖌️ در حال طراحی عکس... لطفاً صبر کنید."))
     
-    api_url = f"{IMAGE_API_URL}{prompt}?width={width}&height={height}&nologo=true"
+    api_url = f"{IMAGE_API_URL}{prompt}?width={width}&height={height}&nologo=true&seed={seed}"
     try:
         response = requests.get(api_url, timeout=30)
         if response.status_code == 200:
@@ -545,13 +546,13 @@ async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message_thread_id=thread_id
         )
         return
-    
+    seed = random.randint(1, 999999)
     loading_message = await update.message.reply_text(
         clean_text("🖌️ در حال طراحی عکس... لطفاً صبر کنید."),
         message_thread_id=thread_id
     )
     
-    api_url = f"{IMAGE_API_URL}{prompt}?width=1024&height=1024&nologo=true"
+    api_url = f"{IMAGE_API_URL}{prompt}?width=1024&height=1024&nologo=true&seed={seed}"
     try:
         response = requests.get(api_url, timeout=30)
         if response.status_code == 200:

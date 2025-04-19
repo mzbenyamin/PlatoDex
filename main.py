@@ -470,7 +470,7 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
     
     # تولید تصویر جدید
     seed = random.randint(1, 1000000)
-    api_url = f"{IMAGE_API_URL}{prompt}?width=2048&height=2048&nologo=true&seed={seed}"
+    api_url = f"{IMAGE_API_URL}{prompt}?width=1024&height=1024&nologo=true&seed={seed}"
     try:
         response = requests.get(api_url, timeout=30)
         if response.status_code == 200:
@@ -551,7 +551,7 @@ async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message_thread_id=thread_id
     )
     
-    api_url = f"{IMAGE_API_URL}{prompt}?width=2048&height=2048&nologo=true"
+    api_url = f"{IMAGE_API_URL}{prompt}?width=1024&height=1024&nologo=true"
     try:
         response = requests.get(api_url, timeout=30)
         if response.status_code == 200:

@@ -36,6 +36,7 @@ SELECT_SIZE, GET_PROMPT = range(2, 4)
 DEFAULT_CHAT_ID = 789912945
 PROCESSED_MESSAGES = set()
 PROCESSING_LOCK = Lock()
+JSON_WRITE_LOCK = Lock()
 
 # پیام سیستمی (ناقص، برای تکمیل توسط شما)
 SYSTEM_MESSAGE = "شما دستیار هوشمند PlatoDex هستید و ..."
@@ -61,7 +62,7 @@ class PlatoItem:
         self.description = description
         self.price = price
         self.images = images
-        self.audios = audios
+        self.audios = audios or []
 
     def to_dict(self):
         """تبدیل شیء PlatoItem به دیکشنری برای ذخیره در JSON"""
@@ -110,9 +111,22 @@ def clean_text(text: str) -> str:
     """پاک‌سازی متن برای تلگرام"""
     return html.escape(str(text)).replace(".", "\\.").replace("-", "\\-").replace("!", "\\!").replace("(", "\\(").replace(")", "\\)")
 
+def load_items_from_json(output_file: str):
+    """بارگذاری آیتم‌ها از فایل JSON در صورت وجود"""
+    global EXTRACTED_ITEMS
+    try:
+        if os.path.exists(output_file):
+            with open(output_file, "r", encoding="utf-8") as f:
+                EXTRACTED_ITEMS = json.load(f)
+            logger.info(f"{len(EXTRACTED_ITEMS)} آیتم از فایل {output_file} بارگذاری شد")
+        else:
+            logger.info(f"فایل {output_file} وجود ندارد، اسکرپ اولیه انجام خواهد شد")
+    except Exception as e:
+        logger.error(f"خطا در بارگذاری فایل JSON: {e}")
+        EXTRACTED_ITEMS = []
+
 async def extract_items(context: ContextTypes.DEFAULT_TYPE = None, output_file: str = "platopedia_items.json"):
     global EXTRACTED_ITEMS
-    EXTRACTED_ITEMS = []
     max_retries = 3
     retry_delay = 5
     headers = {
@@ -180,16 +194,14 @@ async def extract_items(context: ContextTypes.DEFAULT_TYPE = None, output_file: 
             for item_id, item_info in items_data.items():
                 med = item_info.get("med", {})
                 images = [BASE_IMAGE_URL + img["uri"] for img in med.get("images", [])]
-                audios = None
-                if med.get("audios"):
-                    audios = [
-                        {
-                            "uri": audio["uri"],
-                            "type": audio.get("type", "audio/mp4"),
-                            "title": audio.get("title", f"{item_id} Audio"),
-                        }
-                        for audio in med["audios"]
-                    ]
+                audios = [
+                    {
+                        "uri": audio["uri"],
+                        "type": audio.get("type", "audio/mp4"),
+                        "title": audio.get("title", f"{item_id} Audio"),
+                    }
+                    for audio in med.get("audios", [])
+                ]
                 details = item_details.get(item_id, {})
                 columns = details.get("columns", {})
                 if columns:
@@ -208,8 +220,9 @@ async def extract_items(context: ContextTypes.DEFAULT_TYPE = None, output_file: 
             # ذخیره در فایل JSON
             items_dict = [item.to_dict() for item in extracted_items]
             try:
-                with open(output_file, "w", encoding="utf-8") as f:
-                    json.dump(items_dict, f, ensure_ascii=False, indent=4)
+                with JSON_WRITE_LOCK:
+                    with open(output_file, "w", encoding="utf-8") as f:
+                        json.dump(items_dict, f, ensure_ascii=False, indent=4)
                 logger.info(f"{len(extracted_items)} آیتم در فایل {output_file} ذخیره شد")
             except Exception as e:
                 logger.error(f"خطا در ذخیره فایل JSON: {e}")
@@ -279,6 +292,15 @@ async def start_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_paginated_categories(update, context, is_group=False)
     return SELECT_CATEGORY
 
+async def search_by_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.message.reply_text(
+        clean_text("اسم آیتم یا دسته‌بندی رو بفرست تا برات پیدا کنم! 😎"),
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]])
+    )
+    return SEARCH_ITEM
+
 async def send_paginated_categories(update: Update, context: ContextTypes.DEFAULT_TYPE, is_group=False):
     categories = context.user_data["categories"]
     page = context.user_data.get("page", 0)
@@ -336,7 +358,7 @@ async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_paginated_items(update, context, is_group="group" in query.data)
     return SEARCH_ITEM
 
-async process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_id = update.message.message_id
     with PROCESSING_LOCK:
         if message_id in PROCESSED_MESSAGES:
@@ -361,7 +383,7 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
     matching_items = context.user_data["matching_items"]
     page = context.user_data.get("page", 0)
     items_per_page = 10
-    total_pages = (len(matching_items) + items_per_page - 1) // items_per_page
+    total_pages = (len(matching_items) +ificate items_per_page - 1) // items_per_page
     
     start_idx = page * items_per_page
     end_idx = min((page + 1) * items_per_page, len(matching_items))
@@ -387,7 +409,7 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
         else:
             message = await update.message.reply_text(results_text, reply_markup=reply_markup)
         context.user_data["last_item_message_id"] = message.message_id
-        for i, audio_info in enumerate(item["audios"], 1):
+        for i, audio_info in enumerate(item["audios"] or [], 1):
             await send_audio(update, context, item, audio_info, i, reply_markup)
         return
     
@@ -451,12 +473,12 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message = await query.message.reply_text(results_text, reply_markup=reply_markup)
     
     context.user_data["last_item_message_id"] = message.message_id
-    for i, audio_info in enumerate(item["audios"], 1):
+    for i, audio_info in enumerate(item["audios"] or [], 1):
         await send_audio(update, context, item, audio_info, i, reply_markup)
     
     return SEARCH_ITEM
 
-async def send_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, item: Dict, audio_info: Dict, index: int, reply_markup: InlineKeyboardMarkup):
+async def send_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, item: Dict, audio_info: Dict, index: int, reply_markup:create InlineKeyboardMarkup):
     try:
         audio_url = audio_info["uri"]
         if not audio_url.startswith("http"):
@@ -483,7 +505,7 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
         await send_paginated_categories(update, context, is_group=True)
         return
     
-    matching_items = [item for item in EXTRACTED_ITEMS if user_input in item["name"].lower() or user_input in item["category"].lower()]
+    matching_items = [item for item in EX EsauTRACTED_ITEMS if user_input in item["name"].lower() or user_input in item["category"].lower()]
     
     if not matching_items:
         thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
@@ -537,7 +559,7 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     
     context.user_data["last_item_message_id"] = message.message_id
-    for i, audio_info in enumerate(item["audios"], 1):
+    for i, audio_info in enumerate(item["audios"] or [], 1):
         await send_audio(update, context, item, audio_info, i, reply_markup)
 
 async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -655,7 +677,7 @@ async def handle_inline_selection(update: Update, context: ContextTypes.DEFAULT_
         return
     keyboard = [[InlineKeyboardButton("↩️ برگشت به لیست آیتم‌ها", callback_data="back_to_items")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    for i, audio_info in enumerate(item["audios"], 1):
+    for i, audio_info in enumerate(item["audios"] or [], 1):
         await send_audio(update, context, item, audio_info, i, reply_markup)
 
 async def show_weekly_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -765,6 +787,16 @@ async def main():
     max_retries = 3
     retry_delay = 5
     
+    # بارگذاری اولیه آیتم‌ها از فایل JSON
+    parser = argparse.ArgumentParser(description="اسکرپ آیتم‌های Platopedia و ذخیره در فایل JSON")
+    parser.add_argument(
+        "--output",
+        default=os.path.join(tempfile.gettempdir(), "platopedia_items.json"),
+        help="نام فایل JSON برای ذخیره آیتم‌ها (پیش‌فرض: platopedia_items.json در دایرکتوری موقت)"
+    )
+    args = parser.parse_args()
+    load_items_from_json(args.output)
+    
     for attempt in range(max_retries):
         try:
             application = Application.builder().token(TOKEN).read_timeout(60).write_timeout(60).connect_timeout(60).build()
@@ -777,7 +809,7 @@ async def main():
             logger.info(f"Webhook روی {WEBHOOK_URL} تنظیم شد.")
             
             schedule_scraping(application)
-            await extract_items()
+            await extract_items(output_file=args.output)
             
             search_conv_handler = ConversationHandler(
                 entry_points=[CallbackQueryHandler(start_item_search, pattern="^search_items$")],
@@ -803,20 +835,6 @@ async def main():
                 persistent=False
             )
             
-            image_conv_handler = ConversationHandler(
-                entry_points=[CallbackQueryHandler(start_generate_image, pattern="^generate_image$")],
-                states={
-                    SELECT_SIZE: [CallbackQueryHandler(select_image_size, pattern="^size_")],
-                    GET_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, generate_image)]
-                },
-                fallbacks=[
-                    CommandHandler("cancel", cancel),
-                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
-                ],
-                name="image_generation",
-                persistent=False
-            )
-            
             application.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
             application.add_handler(CommandHandler("i", process_item_in_group, filters=filters.ChatType.GROUPS))
             application.add_handler(CommandHandler("w", show_weekly_leaderboard, filters=filters.ChatType.GROUPS))
@@ -827,7 +845,6 @@ async def main():
             application.add_handler(CallbackQueryHandler(handle_leaderboard_selection, pattern="^leader_"))
             application.add_handler(CallbackQueryHandler(back_to_leaderboard, pattern="^back_to_leaderboard$"))
             application.add_handler(search_conv_handler)
-            application.add_handler(image_conv_handler)
             application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
             application.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
             application.add_handler(InlineQueryHandler(inline_query))
@@ -837,6 +854,10 @@ async def main():
             application.add_handler(MessageHandler(filters.Regex(r"(?i)(لیدربرد|رهبری|رتبه|Leaderboard)"), show_weekly_leaderboard))
             application.add_handler(MessageHandler(filters.Regex(r"(?i)(آیتم|item)"), process_item_in_group))
             application.add_handler(CallbackQueryHandler(start_item_search, pattern="^search_items$"))
+            application.add_handler(CommandHandler("cancel", cancel))
+            application.add_handler(CallbackQueryHandler(start_generate_image, pattern="^generate_image$"))
+            application.add_handler(CallbackQueryHandler(select_image_size, pattern="^size_"))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, generate_image))
             application.add_error_handler(error_handler)
             
             logger.info("در حال آماده‌سازی ربات...")
@@ -862,8 +883,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="اسکرپ آیتم‌های Platopedia و ذخیره در فایل JSON")
     parser.add_argument(
         "--output",
-        default="platopedia_items.json",
-        help="نام فایل JSON برای ذخیره آیتم‌ها (پیش‌فرض: platopedia_items.json)"
+        default=os.path.join(tempfile.gettempdir(), "platopedia_items.json"),
+        help="نام فایل JSON برای ذخیره آیتم‌ها (پیش‌فرض: platopedia_items.json در دایرکتوری موقت)"
     )
     args = parser.parse_args()
     asyncio.run(main())

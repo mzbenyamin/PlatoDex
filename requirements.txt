@@ -1,4 +1,4 @@
-python-telegram-bot[job-queue,webhooks]>=21.0
+python-telegram-bot[job-queue]>=21.0
 requests>=2.31.0
 beautifulsoup4>=4.12.3
 fastapi>=0.110.0

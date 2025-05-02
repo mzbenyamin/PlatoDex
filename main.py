@@ -1,4 +1,4 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent, InputFile
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent, InputFile, error
 from telegram.ext import Application, CommandHandler, ContextTypes, InlineQueryHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler
 import requests
 from bs4 import BeautifulSoup
@@ -254,6 +254,39 @@ def scrape_profile(player_link):
     except Exception as e:
         logger.error(f"خطا در اسکرپ پروفایل: {e}")
         return None
+
+# نمایش لیدربرد
+async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message_id = update.message.message_id
+    with PROCESSING_LOCK:
+        if message_id in PROCESSED_MESSAGES:
+            logger.warning(f"پیام تکراری در گروه با message_id: {message_id} - نادیده گرفته شد")
+            return
+        PROCESSED_MESSAGES.add(message_id)
+    
+    chat_id = update.effective_chat.id
+    thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
+    
+    try:
+        await context.bot.get_chat(chat_id)
+    except Exception as e:
+        logger.error(f"خطا در دسترسی به چت {chat_id}: {e}")
+        if "Forbidden" in str(e):
+            await update.message.reply_text(clean_text("متأسفم، من از این گروه بیرون انداخته شدم! 😕 دوباره منو اد کن تا کمکت کنم."), message_thread_id=thread_id)
+        else:
+            await update.message.reply_text(clean_text("یه مشکلی پیش اومد، نمی‌تونم چت رو پیدا کنم! 😅"), message_thread_id=thread_id)
+        return
+    
+    leaderboard_data = scrape_leaderboard()
+    if not leaderboard_data:
+        await update.message.reply_text(clean_text("مشکلی در دریافت لیدربرد پیش اومد! 😅 بعداً امتحان کنید."), message_thread_id=thread_id)
+        return
+    
+    leaderboard_text = "🏆 لیدربرد بازیکنان برتر:\n\n"
+    for i, player in enumerate(leaderboard_data, 1):
+        leaderboard_text += f"{i}. {player['username']} - {player['wins']} برد\n"
+    
+    await update.message.reply_text(clean_text(leaderboard_text), message_thread_id=thread_id)
 
 async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
     global EXTRACTED_ITEMS
@@ -825,7 +858,7 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
     elif update.callback_query:
         try:
             message = await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
-        except telegram.error.BadRequest as e:
+        except error.BadRequest as e:
             if "Message to edit not found" in str(e):
                 logger.warning(f"پیام برای ویرایش پیدا نشد، ارسال پیام جدید: {e}")
                 message = await update.callback_query.message.reply_text(message_text, reply_markup=reply_markup)
@@ -925,7 +958,7 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.delete_message(chat_id=query.message.chat_id, message_id=last_items_message_id)
         except Exception as e:
-            logger.error(f"خطا در حذف پیام لیست آیتم‌ها: {e}")
+            logger.warning(f"پیام لیست آیتم‌ها با ID {last_items_message_id} پیدا نشد: {e}")
     
     return SEARCH_ITEM
 
@@ -939,7 +972,7 @@ async def back_to_items(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.delete_message(chat_id=query.message.chat_id, message_id=last_item_message_id)
             logger.info(f"پیام آیتم با ID {last_item_message_id} حذف شد.")
         except Exception as e:
-            logger.error(f"خطا در حذف پیام آیتم: {e}")
+            logger.warning(f"پیام آیتم با ID {last_item_message_id} پیدا نشد: {e}")
     
     last_items_message_id = context.user_data.get("last_items_message_id")
     if last_items_message_id:
@@ -947,7 +980,7 @@ async def back_to_items(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.delete_message(chat_id=query.message.chat_id, message_id=last_items_message_id)
             logger.info(f"پیام لیست آیتم‌ها با ID {last_items_message_id} حذف شد.")
         except Exception as e:
-            logger.error(f"خطا در حذف پیام لیست آیتم‌ها: {e}")
+            logger.warning(f"پیام لیست آیتم‌ها با ID {last_items_message_id} پیدا نشد: {e}")
     
     await send_paginated_items(update, context, is_group=False)
     return SEARCH_ITEM
@@ -1057,7 +1090,7 @@ async def send_paginated_categories(update: Update, context: ContextTypes.DEFAUL
     elif update.callback_query:
         try:
             await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
-        except telegram.error.BadRequest as e:
+        except error.BadRequest as e:
             if "Message to edit not found" in str(e):
                 logger.warning(f"پیام برای ویرایش پیدا نشد، ارسال پیام جدید: {e}")
                 await update.callback_query.message.reply_text(message_text, reply_markup=reply_markup)
@@ -1322,6 +1355,38 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update and update.effective_message:
         await update.effective_message.reply_text(clean_text("مشکلی پیش اومد! 😅 لطفاً دوباره امتحان کنید."))
 
+async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message_id = update.message.message_id
+    with PROCESSING_LOCK:
+        if message_id in PROCESSED_MESSAGES:
+            logger.warning(f"پیام تکراری در گروه با message_id: {message_id} - نادیده گرفته شد")
+            return
+        PROCESSED_MESSAGES.add(message_id)
+    
+    chat_id = update.effective_chat.id
+    thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
+    
+    try:
+        await context.bot.get_chat(chat_id)
+    except Exception as e:
+        logger.error(f"خطا در دسترسی به چت {chat_id}: {e}")
+        if "Forbidden" in str(e):
+            await update.message.reply_text(clean_text("متأسفم، من از این گروه بیرون انداخته شدم! 😕 دوباره منو اد کن تا کمکت کنم."), message_thread_id=thread_id)
+        else:
+            await update.message.reply_text(clean_text("یه مشکلی پیش اومد، نمی‌تونم چت رو پیدا کنم! 😅"), message_thread_id=thread_id)
+        return
+    
+    leaderboard_data = scrape_leaderboard()
+    if not leaderboard_data:
+        await update.message.reply_text(clean_text("مشکلی در دریافت لیدربرد پیش اومد! 😅 بعداً امتحان کنید."), message_thread_id=thread_id)
+        return
+    
+    leaderboard_text = "🏆 لیدربرد بازیکنان برتر:\n\n"
+    for i, player in enumerate(leaderboard_data, 1):
+        leaderboard_text += f"{i}. {player['username']} - {player['wins']} برد\n"
+    
+    await update.message.reply_text(clean_text(leaderboard_text), message_thread_id=thread_id)
+
 async def main():
     global application
     max_retries = 3
@@ -1411,6 +1476,8 @@ async def main():
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
             application.add_handler(CommandHandler("item", process_item_in_group, filters=filters.ChatType.GROUPS))
+            application.add_handler(CommandHandler("i", process_item_in_group, filters=filters.ChatType.GROUPS))
+            application.add_handler(CommandHandler("w", show_leaderboard, filters=filters.ChatType.GROUPS))
             application.add_error_handler(error_handler)
 
             port = int(os.getenv("PORT", 8000))

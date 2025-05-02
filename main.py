@@ -124,7 +124,7 @@ async def webhook(request: Request):
     update_obj = Update.de_json(update, application.bot)
     update_id = update_obj.update_id
     logger.info(f"دریافت درخواست با update_id: {update_id}")
-    with PROCESSING_LOCK:
+    async with PROCESSING_LOCK:
         if update_id in PROCESSED_MESSAGES:
             logger.warning(f"درخواست تکراری با update_id: {update_id} - نادیده گرفته شد")
             return {"status": "ok"}
@@ -258,7 +258,7 @@ def scrape_profile(player_link):
 # نمایش لیدربرد
 async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_id = update.message.message_id
-    with PROCESSING_LOCK:
+    async with PROCESSING_LOCK:
         if message_id in PROCESSED_MESSAGES:
             logger.warning(f"پیام تکراری در گروه با message_id: {message_id} - نادیده گرفته شد")
             return
@@ -609,7 +609,7 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
 
 async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_id = update.message.message_id
-    with PROCESSING_LOCK:
+    async with PROCESSING_LOCK:
         if message_id in PROCESSED_MESSAGES:
             logger.warning(f"پیام تکراری در گروه با message_id: {message_id} - نادیده گرفته شد")
             return
@@ -778,7 +778,7 @@ async def search_by_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_id = update.message.message_id
-    with PROCESSING_LOCK:
+    async with PROCESSING_LOCK:
         if message_id in PROCESSED_MESSAGES:
             logger.warning(f"پیام تکراری در چت خصوصی با message_id: {message_id} - نادیده گرفته شد")
             return SEARCH_ITEM
@@ -852,22 +852,23 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
     reply_markup = InlineKeyboardMarkup(keyboard)
     message_text = clean_text(f"این آیتم‌ها رو پیدا کردم (صفحه {page + 1} از {total_pages})، کدوم رو می‌خوای؟ 👇")
     
-    if is_group and update.message:
-        thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
-        message = await update.message.reply_text(message_text, reply_markup=reply_markup, message_thread_id=thread_id)
-    elif update.callback_query:
-        try:
-            message = await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
-        except error.BadRequest as e:
-            if "Message to edit not found" in str(e):
-                logger.warning(f"پیام برای ویرایش پیدا نشد، ارسال پیام جدید: {e}")
-                message = await update.callback_query.message.reply_text(message_text, reply_markup=reply_markup)
-            else:
-                raise
-    else:
-        message = await update.message.reply_text(message_text, reply_markup=reply_markup)
-    
-    context.user_data["last_items_message_id"] = message.message_id
+    async with PROCESSING_LOCK:
+        if is_group and update.message:
+            thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
+            message = await update.message.reply_text(message_text, reply_markup=reply_markup, message_thread_id=thread_id)
+        elif update.callback_query:
+            try:
+                message = await update.callback_query.message.edit_text(message_text, reply_markup=reply_markup)
+            except error.BadRequest as e:
+                if "Message to edit not found" in str(e) or "There is no text in the message to edit" in str(e):
+                    logger.warning(f"پیام برای ویرایش پیدا نشد یا متن ندارد، ارسال پیام جدید: {e}")
+                    message = await update.callback_query.message.reply_text(message_text, reply_markup=reply_markup)
+                else:
+                    raise
+        else:
+            message = await update.message.reply_text(message_text, reply_markup=reply_markup)
+        
+        context.user_data["last_items_message_id"] = message.message_id
 
 async def send_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, item, audio_info, index, reply_markup=None, thread_id=None):
     audio_url = audio_info["uri"]
@@ -935,30 +936,31 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("↩️ برگشت به لیست آیتم‌ها", callback_data="back_to_items")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    if item["images"]:
-        message = await context.bot.send_photo(
-            chat_id=query.message.chat_id,
-            photo=item["images"][0],
-            caption=results_text,
-            reply_markup=reply_markup
-        )
-    else:
-        message = await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text=results_text,
-            reply_markup=reply_markup
-        )
-    context.user_data["last_item_message_id"] = message.message_id
+    async with PROCESSING_LOCK:
+        if item["images"]:
+            message = await context.bot.send_photo(
+                chat_id=query.message.chat_id,
+                photo=item["images"][0],
+                caption=results_text,
+                reply_markup=reply_markup
+            )
+        else:
+            message = await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=results_text,
+                reply_markup=reply_markup
+            )
+        context.user_data["last_item_message_id"] = message.message_id
     
-    for i, audio_info in enumerate(item["audios"], 1):
-        await send_audio(update, context, item, audio_info, i, reply_markup)
+        for i, audio_info in enumerate(item["audios"], 1):
+            await send_audio(update, context, item, audio_info, i, reply_markup)
     
-    last_items_message_id = context.user_data.get("last_items_message_id")
-    if last_items_message_id:
-        try:
-            await context.bot.delete_message(chat_id=query.message.chat_id, message_id=last_items_message_id)
-        except Exception as e:
-            logger.warning(f"پیام لیست آیتم‌ها با ID {last_items_message_id} پیدا نشد: {e}")
+        last_items_message_id = context.user_data.get("last_items_message_id")
+        if last_items_message_id:
+            try:
+                await context.bot.delete_message(chat_id=query.message.chat_id, message_id=last_items_message_id)
+            except Exception as e:
+                logger.warning(f"پیام لیست آیتم‌ها با ID {last_items_message_id} پیدا نشد: {e}")
     
     return SEARCH_ITEM
 
@@ -966,28 +968,31 @@ async def back_to_items(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    last_item_message_id = context.user_data.get("last_item_message_id")
-    if last_item_message_id:
-        try:
-            await context.bot.delete_message(chat_id=query.message.chat_id, message_id=last_item_message_id)
-            logger.info(f"پیام آیتم با ID {last_item_message_id} حذف شد.")
-        except Exception as e:
-            logger.warning(f"پیام آیتم با ID {last_item_message_id} پیدا نشد: {e}")
-    
-    last_items_message_id = context.user_data.get("last_items_message_id")
-    if last_items_message_id:
-        try:
-            await context.bot.delete_message(chat_id=query.message.chat_id, message_id=last_items_message_id)
-            logger.info(f"پیام لیست آیتم‌ها با ID {last_items_message_id} حذف شد.")
-        except Exception as e:
-            logger.warning(f"پیام لیست آیتم‌ها با ID {last_items_message_id} پیدا نشد: {e}")
+    async with PROCESSING_LOCK:
+        last_item_message_id = context.user_data.get("last_item_message_id")
+        if last_item_message_id:
+            try:
+                await context.bot.delete_message(chat_id=query.message.chat_id, message_id=last_item_message_id)
+                logger.info(f"پیام آیتم با ID {last_item_message_id} حذف شد.")
+                context.user_data.pop("last_item_message_id", None)
+            except Exception as e:
+                logger.warning(f"پیام آیتم با ID {last_item_message_id} پیدا نشد: {e}")
+        
+        last_items_message_id = context.user_data.get("last_items_message_id")
+        if last_items_message_id:
+            try:
+                await context.bot.delete_message(chat_id=query.message.chat_id, message_id=last_items_message_id)
+                logger.info(f"پیام لیست آیتم‌ها با ID {last_items_message_id} حذف شد.")
+                context.user_data.pop("last_items_message_id", None)
+            except Exception as e:
+                logger.warning(f"پیام لیست آیتم‌ها با ID {last_items_message_id} پیدا نشد: {e}")
     
     await send_paginated_items(update, context, is_group=False)
     return SEARCH_ITEM
 
 async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_id = update.message.message_id
-    with PROCESSING_LOCK:
+    async with PROCESSING_LOCK:
         if message_id in PROCESSED_MESSAGES:
             logger.warning(f"پیام تکراری در گروه با message_id: {message_id} - نادیده گرفته شد")
             return
@@ -1084,20 +1089,21 @@ async def send_paginated_categories(update: Update, context: ContextTypes.DEFAUL
     reply_markup = InlineKeyboardMarkup(keyboard)
     message_text = clean_text(f"دسته‌بندی‌ها (صفحه {page + 1} از {total_pages})، کدوم رو می‌خوای؟ 👇")
     
-    if is_group and update.message:
-        thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
-        await update.message.reply_text(message_text, reply_markup=reply_markup, message_thread_id=thread_id)
-    elif update.callback_query:
-        try:
-            await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
-        except error.BadRequest as e:
-            if "Message to edit not found" in str(e):
-                logger.warning(f"پیام برای ویرایش پیدا نشد، ارسال پیام جدید: {e}")
-                await update.callback_query.message.reply_text(message_text, reply_markup=reply_markup)
-            else:
-                raise
-    else:
-        await update.message.reply_text(message_text, reply_markup=reply_markup)
+    async with PROCESSING_LOCK:
+        if is_group and update.message:
+            thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
+            await update.message.reply_text(message_text, reply_markup=reply_markup, message_thread_id=thread_id)
+        elif update.callback_query:
+            try:
+                await update.callback_query.message.edit_text(message_text, reply_markup=reply_markup)
+            except error.BadRequest as e:
+                if "Message to edit not found" in str(e):
+                    logger.warning(f"پیام برای ویرایش پیدا نشد، ارسال پیام جدید: {e}")
+                    await update.callback_query.message.reply_text(message_text, reply_markup=reply_markup)
+                else:
+                    raise
+        else:
+            await update.message.reply_text(message_text, reply_markup=reply_markup)
 
 async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1122,7 +1128,7 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     thread_id = query.message.message_thread_id if hasattr(query.message, 'is_topic_message') and query.message.is_topic_message else None
     
     if not item:
-        await query.edit_message_text(clean_text("آیتم پیدا نشد! 😕"))
+        await query.message.reply_text(clean_text("آیتم پیدا نشد! 😕"), message_thread_id=thread_id)
         return
     
     price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
@@ -1137,49 +1143,50 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📣 @PlatoDex"
     )
     
-    if item["images"]:
-        image_url = item["images"][0]
-        if image_url.lower().endswith('.webp'):
-            async def process_webp():
-                try:
-                    response = requests.get(image_url, timeout=20)
-                    response.raise_for_status()
-                    img = Image.open(io.BytesIO(response.content))
-                    gif_buffer = io.BytesIO()
-                    if img.mode != 'RGBA':
-                        img = img.convert('RGBA')
-                    img.save(gif_buffer, format='GIF', save_all=True, optimize=True)
-                    gif_buffer.seek(0)
-                    input_file = InputFile(gif_buffer, filename="animation.gif")
-                    await query.message.reply_animation(
-                        animation=input_file,
-                        caption=results_text,
-                        message_thread_id=thread_id
-                    )
-                    for i, audio_info in enumerate(item["audios"], 1):
-                        await send_audio(update, context, item, audio_info, i, None, thread_id)
-                except Exception as e:
-                    logger.error(f"خطا در تبدیل WebP: {e}")
-                    await query.message.reply_text(clean_text("مشکلی توی ارسال عکس پیش اومد! 😅"), message_thread_id=thread_id)
-            asyncio.create_task(process_webp())
-        elif image_url.lower().endswith('.gif'):
-            await query.message.reply_animation(
-                animation=image_url,
-                caption=results_text,
-                message_thread_id=thread_id
-            )
-            for i, audio_info in enumerate(item["audios"], 1):
-                await send_audio(update, context, item, audio_info, i, None, thread_id)
+    async with PROCESSING_LOCK:
+        if item["images"]:
+            image_url = item["images"][0]
+            if image_url.lower().endswith('.webp'):
+                async def process_webp():
+                    try:
+                        response = requests.get(image_url, timeout=20)
+                        response.raise_for_status()
+                        img = Image.open(io.BytesIO(response.content))
+                        gif_buffer = io.BytesIO()
+                        if img.mode != 'RGBA':
+                            img = img.convert('RGBA')
+                        img.save(gif_buffer, format='GIF', save_all=True, optimize=True)
+                        gif_buffer.seek(0)
+                        input_file = InputFile(gif_buffer, filename="animation.gif")
+                        await query.message.reply_animation(
+                            animation=input_file,
+                            caption=results_text,
+                            message_thread_id=thread_id
+                        )
+                        for i, audio_info in enumerate(item["audios"], 1):
+                            await send_audio(update, context, item, audio_info, i, None, thread_id)
+                    except Exception as e:
+                        logger.error(f"خطا در تبدیل WebP: {e}")
+                        await query.message.reply_text(clean_text("مشکلی توی ارسال عکس پیش اومد! 😅"), message_thread_id=thread_id)
+                asyncio.create_task(process_webp())
+            elif image_url.lower().endswith('.gif'):
+                await query.message.reply_animation(
+                    animation=image_url,
+                    caption=results_text,
+                    message_thread_id=thread_id
+                )
+                for i, audio_info in enumerate(item["audios"], 1):
+                    await send_audio(update, context, item, audio_info, i, None, thread_id)
+            else:
+                await query.message.reply_photo(
+                    photo=image_url,
+                    caption=results_text,
+                    message_thread_id=thread_id
+                )
+                for i, audio_info in enumerate(item["audios"], 1):
+                    await send_audio(update, context, item, audio_info, i, None, thread_id)
         else:
-            await query.message.reply_photo(
-                photo=image_url,
-                caption=results_text,
-                message_thread_id=thread_id
-            )
-            for i, audio_info in enumerate(item["audios"], 1):
-                await send_audio(update, context, item, audio_info, i, None, thread_id)
-    else:
-        await query.message.reply_text(results_text, message_thread_id=thread_id)
+            await query.message.reply_text(results_text, message_thread_id=thread_id)
 
 async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1187,20 +1194,21 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_group = "group" in query.data
     page = context.user_data.get("page", 0)
     
-    if "categories" in query.data:
-        if "next_page" in query.data:
-            context.user_data["page"] = page + 1
-        elif "prev_page" in query.data:
-            context.user_data["page"] = max(0, page - 1)
-        await send_paginated_categories(update, context, is_group=is_group)
-        return SELECT_CATEGORY if not is_group else None
-    else:
-        if "next_page" in query.data:
-            context.user_data["page"] = page + 1
-        elif "prev_page" in query.data:
-            context.user_data["page"] = max(0, page - 1)
-        await send_paginated_items(update, context, is_group=is_group)
-        return SEARCH_ITEM if not is_group else None
+    async with PROCESSING_LOCK:
+        if "categories" in query.data:
+            if "next_page" in query.data:
+                context.user_data["page"] = page + 1
+            elif "prev_page" in query.data:
+                context.user_data["page"] = max(0, page - 1)
+            await send_paginated_categories(update, context, is_group=is_group)
+            return SELECT_CATEGORY if not is_group else None
+        else:
+            if "next_page" in query.data:
+                context.user_data["page"] = page + 1
+            elif "prev_page" in query.data:
+                context.user_data["page"] = max(0, page - 1)
+            await send_paginated_items(update, context, is_group=is_group)
+            return SEARCH_ITEM if not is_group else None
 
 async def chat_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1263,7 +1271,7 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_id = update.message.message_id
-    with PROCESSING_LOCK:
+    async with PROCESSING_LOCK:
         if message_id in PROCESSED_MESSAGES:
             logger.warning(f"پیام تکراری در گروه با message_id: {message_id} - نادیده گرفته شد")
             return
@@ -1354,38 +1362,6 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"خطا در پردازش آپدیت: {context.error}")
     if update and update.effective_message:
         await update.effective_message.reply_text(clean_text("مشکلی پیش اومد! 😅 لطفاً دوباره امتحان کنید."))
-
-async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message_id = update.message.message_id
-    with PROCESSING_LOCK:
-        if message_id in PROCESSED_MESSAGES:
-            logger.warning(f"پیام تکراری در گروه با message_id: {message_id} - نادیده گرفته شد")
-            return
-        PROCESSED_MESSAGES.add(message_id)
-    
-    chat_id = update.effective_chat.id
-    thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
-    
-    try:
-        await context.bot.get_chat(chat_id)
-    except Exception as e:
-        logger.error(f"خطا در دسترسی به چت {chat_id}: {e}")
-        if "Forbidden" in str(e):
-            await update.message.reply_text(clean_text("متأسفم، من از این گروه بیرون انداخته شدم! 😕 دوباره منو اد کن تا کمکت کنم."), message_thread_id=thread_id)
-        else:
-            await update.message.reply_text(clean_text("یه مشکلی پیش اومد، نمی‌تونم چت رو پیدا کنم! 😅"), message_thread_id=thread_id)
-        return
-    
-    leaderboard_data = scrape_leaderboard()
-    if not leaderboard_data:
-        await update.message.reply_text(clean_text("مشکلی در دریافت لیدربرد پیش اومد! 😅 بعداً امتحان کنید."), message_thread_id=thread_id)
-        return
-    
-    leaderboard_text = "🏆 لیدربرد بازیکنان برتر:\n\n"
-    for i, player in enumerate(leaderboard_data, 1):
-        leaderboard_text += f"{i}. {player['username']} - {player['wins']} برد\n"
-    
-    await update.message.reply_text(clean_text(leaderboard_text), message_thread_id=thread_id)
 
 async def main():
     global application
@@ -1478,6 +1454,7 @@ async def main():
             application.add_handler(CommandHandler("item", process_item_in_group, filters=filters.ChatType.GROUPS))
             application.add_handler(CommandHandler("i", process_item_in_group, filters=filters.ChatType.GROUPS))
             application.add_handler(CommandHandler("w", show_leaderboard, filters=filters.ChatType.GROUPS))
+            application.add_handler(CallbackQueryHandler(select_group_item, pattern="^select_group_item_"))
             application.add_error_handler(error_handler)
 
             port = int(os.getenv("PORT", 8000))

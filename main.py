@@ -9,13 +9,13 @@ import logging
 import asyncio
 import time
 from fastapi import FastAPI, Request
-import uvicorn
 from PIL import Image
 import io
 import tempfile
 import os
 from threading import Lock
 import random
+from typing import List, Dict, Optional, Union
 
 # تنظیم لاگ
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -36,6 +36,7 @@ DEFAULT_CHAT_ID = 789912945
 PROCESSED_MESSAGES = set()
 PROCESSING_LOCK = Lock()
 
+# پیام سیستم (خالی برای وارد کردن دستی)
 SYSTEM_MESSAGE = (
     "شما دستیار هوشمند PlatoDex هستید و درمورد پلاتو به کاربران کمک میکنید و به صورت خودمونی جذاب و با ایموجی "
     "حرف میزنی به صورت نسل Z و کمی با طنز حرف بزن و شوخی کنه\\. به مشخصات آیتم‌های پلاتو دسترسی داری و می‌تونی "
@@ -147,6 +148,37 @@ def clean_text(text):
             text = text.replace(ad_text, "").strip()
     return text.strip()
 
+# تعریف کلاس PlatoItem
+class PlatoItem:
+    def __init__(
+        self,
+        id: str,
+        name: str,
+        category: str,
+        description: str,
+        price: Dict[str, Union[int, str]],
+        images: List[str],
+        audios: Optional[List[Dict[str, str]]] = None
+    ):
+        self.id = id
+        self.name = name
+        self.category = category
+        self.description = description
+        self.price = price
+        self.images = images
+        self.audios = audios
+
+    def to_dict(self) -> Dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "category": self.category,
+            "description": self.description,
+            "price": self.price,
+            "images": self.images,
+            "audios": self.audios
+        }
+
 # اسکرپ لیدربرد
 def scrape_leaderboard():
     url = "https://platoapp.com/en"
@@ -187,7 +219,7 @@ def scrape_leaderboard():
                 'profile_image': profile_img_url,
                 'wins': wins
             })
-        return leaderboard_data[:10]  # فقط 10 نفر برتر
+        return leaderboard_data[:10]
     except Exception as e:
         logger.error(f"خطا در اسکرپ لیدربرد: {e}")
         return None
@@ -228,7 +260,9 @@ async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
     max_retries = 3
     retry_delay = 5
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5"
     }
 
     for attempt in range(max_retries):
@@ -236,64 +270,102 @@ async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
             logger.info(f"تلاش {attempt + 1} برای اسکرپ آیتم‌ها از {URL}")
             response = requests.get(URL, headers=headers, timeout=30)
             logger.info(f"وضعیت پاسخ: {response.status_code}")
-            
+
             if response.status_code != 200:
                 logger.error(f"خطا در درخواست HTTP: {response.status_code}")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(retry_delay)
                 continue
-            
+
             soup = BeautifulSoup(response.text, "html.parser")
-            script_tag = soup.find("script", string=re.compile(r"window\.__PRELOADED_STATE__"))
-            if not script_tag:
-                logger.error("تگ اسکریپت با __PRELOADED_STATE__ پیدا نشد!")
+
+            # استخراج داده‌های آیتم‌ها از اسکریپت
+            items_data = {}
+            script_tags = soup.find_all("script")
+            for tag in script_tags:
+                script_content = tag.string or ""
+                # بررسی برای var items
+                if "var items = {" in script_content:
+                    match = re.search(r"var items = ({.*?});", script_content, re.DOTALL)
+                    if match and match.group(1):
+                        try:
+                            items_data = json.loads(match.group(1))
+                            logger.info(f"داده‌های آیتم‌ها پیدا شد (var items): {len(items_data)} آیتم")
+                            break
+                        except json.JSONDecodeError as e:
+                            logger.error(f"خطا در تجزیه JSON آیتم‌ها (var items): {e}")
+                            continue
+                # بررسی برای __PRELOADED_STATE__
+                elif "__PRELOADED_STATE__" in script_content:
+                    match = re.search(r"window\.__PRELOADED_STATE__ = ({.*?});", script_content, re.DOTALL)
+                    if match and match.group(1):
+                        try:
+                            preload_data = json.loads(match.group(1))
+                            items_data = preload_data.get("items", {}) or preload_data.get("data", {}).get("items", {})
+                            logger.info(f"داده‌های آیتم‌ها پیدا شد (__PRELOADED_STATE__): {len(items_data)} آیتم")
+                            break
+                        except json.JSONDecodeError as e:
+                            logger.error(f"خطا در تجزیه JSON آیتم‌ها (__PRELOADED_STATE__): {e}")
+                            continue
+
+            if not items_data:
+                logger.error("داده‌های آیتم‌ها در اسکریپت پیدا نشد!")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(retry_delay)
                 continue
-            
-            script_content = script_tag.string
-            json_match = re.search(r"window\.__PRELOADED_STATE__\s*=\s*(\{.*?\});", script_content, re.DOTALL)
-            if not json_match:
-                logger.error("داده JSON پیدا نشد!")
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(retry_delay)
-                continue
-            
-            json_data = json.loads(json_match.group(1))
-            items_data = json_data.get("items", {}).get("items", [])
-            logger.info(f"تعداد آیتم‌های خام پیدا شده: {len(items_data)}")
-            
-            for item in items_data:
-                try:
-                    images = []
-                    for img in item.get("images", []):
-                        img_url = img.get("uri", "")
-                        if img_url and not img_url.startswith("http"):
-                            img_url = BASE_IMAGE_URL + img_url
-                        images.append(img_url)
-                    
-                    audios = item.get("audios", []) or []
-                    price = item.get("price", {})
-                    price_value = price.get("value", 0)
-                    price_type = price.get("type", "unknown")
-                    
-                    extracted_item = {
-                        "id": str(item.get("id", "")),
-                        "name": item.get("name", "Unknown"),
-                        "category": item.get("category", "Uncategorized"),
-                        "description": item.get("description", "بدون توضیحات"),
-                        "images": images,
-                        "audios": audios,
-                        "price": {
-                            "value": price_value,
-                            "type": price_type
-                        }
+
+            # استخراج جزئیات آیتم‌ها از جدول
+            item_details = {}
+            table = soup.find(id="tool_items_table_default")
+            if table:
+                rows = table.find("tbody").find_all("tr")
+                logger.info(f"تعداد ردیف‌های جدول: {len(rows)}")
+                for row in rows:
+                    item_id = row.get("id", "").replace("id-", "")
+                    if not item_id:
+                        continue
+                    cols = row.find_all("td")
+                    item_columns = {f"column_{i+1}": col.get_text(strip=True) for i, col in enumerate(cols)}
+                    price_text = item_columns.get("column_4", "0")
+                    price_match = re.search(r"\d[\d,]*", price_text)
+                    price_value = int(price_match.group(0).replace(",", "")) if price_match else 0
+                    price_type = "premium" if price_value < 100 else "coins"
+                    item_details[item_id] = {
+                        "columns": item_columns,
+                        "price": {"value": price_value, "type": price_type}
                     }
-                    EXTRACTED_ITEMS.append(extracted_item)
-                except Exception as e:
-                    logger.error(f"خطا در پردازش آیتم {item.get('name', 'Unknown')}: {e}")
-            
+
+            # پردازش آیتم‌ها
+            extracted_items = []
+            for item_id, item_info in items_data.items():
+                med = item_info.get("med", {})
+                images = [BASE_IMAGE_URL + img["uri"] for img in med.get("images", [])]
+                audios = [
+                    {
+                        "uri": audio["uri"],
+                        "type": audio.get("type", "audio/mp4"),
+                        "title": audio.get("title", f"{item_id} Audio")
+                    }
+                    for audio in med.get("audios", []) if med.get("audios")
+                ] or []
+
+                details = item_details.get(item_id, {})
+                columns = details.get("columns", {})
+                if columns:
+                    extracted_item = PlatoItem(
+                        id=item_id,
+                        name=columns.get("column_3", "Unknown Item"),
+                        category=columns.get("column_2", "Unknown"),
+                        description=columns.get("column_5", "No description available"),
+                        price=details.get("price", {"value": 0, "type": "unknown"}),
+                        images=images,
+                        audios=audios
+                    )
+                    extracted_items.append(extracted_item)
+
+            EXTRACTED_ITEMS = [item.to_dict() for item in extracted_items]
             logger.info(f"تعداد آیتم‌های اسکرپ شده: {len(EXTRACTED_ITEMS)}")
+
             if EXTRACTED_ITEMS:
                 if context and hasattr(context.bot, "send_message"):
                     await context.bot.send_message(
@@ -305,12 +377,12 @@ async def extract_items(context: ContextTypes.DEFAULT_TYPE = None):
                 logger.warning("هیچ آیتمی اسکرپ نشد!")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(retry_delay)
-        
+
         except Exception as e:
             logger.error(f"خطا در اسکرپ آیتم‌ها (تلاش {attempt + 1}): {e}")
             if attempt < max_retries - 1:
                 await asyncio.sleep(retry_delay)
-    
+
     logger.error("اسکرپ آیتم‌ها بعد از تمام تلاش‌ها ناموفق بود!")
     if context and hasattr(context.bot, "send_message"):
         await context.bot.send_message(
@@ -435,7 +507,6 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     logger.info(f"دکمه تولید مجدد تصویر کلیک شد! callback_data: {query.data}")
     
-    # استخراج پرامپت
     if not query.data.startswith("regenerate_image_"):
         logger.error("callback_data نامعتبر است!")
         await query.message.reply_text(clean_text("خطایی رخ داد! لطفاً دوباره امتحان کنید. 😅"))
@@ -450,7 +521,6 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
     thread_id = query.message.message_thread_id if hasattr(query.message, 'is_topic_message') and query.message.is_topic_message else None
     chat_id = query.message.chat_id
     
-    # حذف تصویر قبلی
     last_image_message_id = context.user_data.get("last_image_message_id")
     if last_image_message_id:
         try:
@@ -459,17 +529,13 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
         except Exception as e:
             logger.error(f"خطا در حذف تصویر قبلی: {e}")
             await query.message.reply_text(clean_text("نشد تصویر قبلی رو پاک کنم، ولی یه تصویر جدید می‌سازم! 😅"))
-    else:
-        logger.warning("last_image_message_id پیدا نشد!")
     
-    # ارسال پیام در حال طراحی
     loading_message = await context.bot.send_message(
         chat_id=chat_id,
         text=clean_text("🖌️ در حال طراحی مجدد عکس... لطفاً صبر کنید."),
         message_thread_id=thread_id
     )
     
-    # تولید تصویر جدید
     seed = random.randint(1, 1000000)
     api_url = f"{IMAGE_API_URL}{prompt}?width=1024&height=1024&nologo=true&seed={seed}"
     try:
@@ -496,7 +562,6 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
                 text=clean_text("مشکلی در تولید تصویر پیش آمد. لطفاً دوباره امتحان کنید."),
                 message_thread_id=thread_id
             )
-            logger.error(f"خطای API: وضعیت {response.status_code}")
     except Exception as e:
         await context.bot.delete_message(chat_id=chat_id, message_id=loading_message.message_id)
         await context.bot.send_message(
@@ -532,9 +597,9 @@ async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text(
             clean_text(
-            "🖌️ لطفاً متنی که میخوای به عکس تبدیل بشه رو به انگلیسی بفرست!\n\n"
-            "برای مثال مثلا:\n/p a woman"
-        ),
+                "🖌️ لطفاً متنی که می‌خوای به عکس تبدیل بشه رو به انگلیسی بفرست!\n\n"
+                "مثلاً:\n/p a woman"
+            ),
             message_thread_id=thread_id
         )
         return
@@ -575,7 +640,6 @@ async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 clean_text("مشکلی در تولید تصویر پیش آمد. لطفاً دوباره امتحان کنید."),
                 message_thread_id=thread_id
             )
-            logger.error(f"خطای API: وضعیت {response.status_code}")
     except Exception as e:
         await context.bot.delete_message(chat_id=chat_id, message_id=loading_message.message_id)
         await update.message.reply_text(
@@ -829,7 +893,6 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("↩️ برگشت به لیست آیتم‌ها", callback_data="back_to_items")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    # ارسال پیام جدید به جای ویرایش پیام قبلی
     if item["images"]:
         message = await context.bot.send_photo(
             chat_id=query.message.chat_id,
@@ -848,7 +911,6 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for i, audio_info in enumerate(item["audios"], 1):
         await send_audio(update, context, item, audio_info, i, reply_markup)
     
-    # حذف پیام لیست آیتم‌ها
     last_items_message_id = context.user_data.get("last_items_message_id")
     if last_items_message_id:
         try:
@@ -1059,7 +1121,7 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for i, audio_info in enumerate(item["audios"], 1):
                 await send_audio(update, context, item, audio_info, i, None, thread_id)
     else:
-        await query.message.reply_text(results_text)
+        await query.message.reply_text(results_text, message_thread_id=thread_id)
 
 async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1190,238 +1252,26 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
             ai_response = clean_text(response.text.strip())
             user_history.append({"role": "assistant", "content": ai_response})
             context.user_data["group_chat_history"] = user_history
-            
-            final_response = ai_response
-            for item in EXTRACTED_ITEMS:
-                if item["name"].lower() in user_message:
-                    price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-                    price_info = clean_text(f"{item['price']['value']} {price_type}")
-                    item_info = clean_text(
-                        f"مشخصات آیتم پیدا شد! 🎉\n"
-                        f"🔖 نام: {item['name']}\n"
-                        f"💸 قیمت: {price_info}\n"
-                        f"اگه می‌خوای مشخصات کامل‌تر با صدا رو ببینی، کافیه بگی: /i {item['name']} 😎"
-                    )
-                    final_response += f"\n\n{item_info}"
-                    break
-            
-            await update.message.reply_text(
-                final_response,
-                reply_to_message_id=update.message.message_id,
-                message_thread_id=thread_id
-            )
+            await update.message.reply_text(ai_response, message_thread_id=thread_id)
         else:
-            error_message = clean_text("اوفف، یه مشکلی پیش اومد! 😅 بعداً امتحان کن 🚀")
             await update.message.reply_text(
-                error_message,
-                reply_to_message_id=update.message.message_id,
+                clean_text("مشکلی پیش اومد! 😅 بعداً دوباره امتحان کن 🚀"),
                 message_thread_id=thread_id
             )
     except Exception as e:
         logger.error(f"خطا در اتصال به API چت گروه: {e}")
-        error_message = clean_text("اییی، یه خطا خوردم! 😭 بعداً دوباره بیا 🚀")
         await update.message.reply_text(
-            error_message,
-            reply_to_message_id=update.message.message_id,
+            clean_text("خطایی رخ داد! 😭 بعداً دوباره امتحان کن 🚀"),
             message_thread_id=thread_id
         )
 
-# نمایش لیدربرد تو گروه
-async def show_weekly_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message_id = update.message.message_id
-    with PROCESSING_LOCK:
-        if message_id in PROCESSED_MESSAGES:
-            logger.warning(f"پیام تکراری در گروه با message_id: {message_id}")
-            return
-        PROCESSED_MESSAGES.add(message_id)
-    
-    leaderboard = scrape_leaderboard()
-    if not leaderboard:
-        await update.message.reply_text(clean_text("مشکلی تو گرفتن لیدربرد پیش اومد! 😅"))
-        return
-    
-    message_text = clean_text("🏆 جدول امتیازات\nبرندگان برتر رتبه‌بندی هفتگی - همه بازی‌ها\n\n")
-    keyboard = []
-    # تیتر ستون‌ها
-    keyboard.append([
-        InlineKeyboardButton("بردها 🏆", callback_data="noop"),
-        InlineKeyboardButton("آیدی بازیکن 🔖", callback_data="noop")
-    ])
-    # اطلاعات بازیکنان
-    for player in leaderboard[:10]:  # فقط 10 نفر برتر
-        keyboard.append([
-            InlineKeyboardButton(player['wins'], callback_data=f"leader_{player['player_id']}"),
-            InlineKeyboardButton(player['username'], callback_data=f"leader_{player['player_id']}")
-        ])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
-    message = await update.message.reply_text(message_text, reply_markup=reply_markup, message_thread_id=thread_id)
-    context.user_data["last_leaderboard_message_id"] = message.message_id
-
-# مدیریت انتخاب بازیکن از لیدربرد
-async def handle_leaderboard_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    player_id = query.data.replace("leader_", "")
-    leaderboard = scrape_leaderboard()
-    player = next((p for p in leaderboard if p['player_id'] == player_id), None)
-    
-    if not player:
-        await query.edit_message_text(clean_text("بازیکن پیدا نشد! 😕"))
-        return
-    
-    player_text = clean_text(
-        f"آیدی بازیکن 🔖: {player['username']}\n"
-        f"بردها 🏆: {player['wins']}\n"
-        f"لیست بازی‌هایی که انجام شده 👇 توسط این بازیکن\n\n"
-    )
-    
-    profile_data = scrape_profile(player['player_link'])
-    if not profile_data:
-        await query.message.reply_text(clean_text("مشکلی تو گرفتن اطلاعات پروفایل پیش اومد! 😅"))
-        return
-    
-    context.user_data["profile_games"] = profile_data
-    context.user_data["profile_page"] = 0
-    context.user_data["player"] = player
-    
-    await send_paginated_profile_games(update, context)
-
-async def send_paginated_profile_games(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    profile_data = context.user_data["profile_games"]
-    page = context.user_data.get("profile_page", 0)
-    items_per_page = 10
-    total_pages = (len(profile_data) + items_per_page - 1) // items_per_page
-    
-    start_idx = page * items_per_page
-    end_idx = min((page + 1) * items_per_page, len(profile_data))
-    current_games = profile_data[start_idx:end_idx]
-    
-    player = context.user_data["player"]
-    player_text = clean_text(
-        f"آیدی بازیکن 🔖: {player['username']}\n"
-        f"بردها 🏆: {player['wins']}\n"
-        f"لیست بازی‌هایی که انجام شده 👇 توسط این بازیکن\n\n"
-    )
-    
-    keyboard = []
-    # تیتر ستون‌ها
-    keyboard.append([
-        InlineKeyboardButton("اسم بازی 🎮", callback_data="noop"),
-        InlineKeyboardButton("بازی شده 🕹", callback_data="noop"),
-        InlineKeyboardButton("بردها 🎖", callback_data="noop")
-    ])
-    # اطلاعات بازی‌ها
-    for game in current_games:
-        keyboard.append([
-            InlineKeyboardButton(game['game_name'], callback_data=f"game_{player['player_id']}_{game['game_name']}"),
-            InlineKeyboardButton(game['played'], callback_data=f"game_{player['player_id']}_{game['game_name']}"),
-            InlineKeyboardButton(game['won'], callback_data=f"game_{player['player_id']}_{game['game_name']}")
-        ])
-    
-    nav_buttons = []
-    if page > 0:
-        nav_buttons.append(InlineKeyboardButton("⬅️ قبلی", callback_data="prev_profile_page"))
-    if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("بعدی ➡️", callback_data="next_profile_page"))
-    if nav_buttons:
-        keyboard.append(nav_buttons)
-    keyboard.append([InlineKeyboardButton("🏠 برگشت به لیدربرد", callback_data="back_to_leaderboard")])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    thread_id = update.callback_query.message.message_thread_id if hasattr(update.callback_query.message, 'is_topic_message') and update.callback_query.message.is_topic_message else None
-    
-    if player['profile_image']:
-        try:
-            response = requests.get(player['profile_image'], timeout=10)
-            if response.status_code == 200:
-                message = await update.callback_query.message.reply_photo(
-                    photo=response.content,
-                    caption=player_text,
-                    reply_markup=reply_markup,
-                    message_thread_id=thread_id
-                )
-            else:
-                message = await update.callback_query.message.reply_text(player_text, reply_markup=reply_markup, message_thread_id=thread_id)
-        except Exception as e:
-            logger.error(f"خطا در ارسال عکس: {e}")
-            message = await update.callback_query.message.reply_text(player_text, reply_markup=reply_markup, message_thread_id=thread_id)
-    else:
-        message = await update.callback_query.message.reply_text(player_text, reply_markup=reply_markup, message_thread_id=thread_id)
-    
-    context.user_data["last_profile_message_id"] = message.message_id
-    await update.callback_query.message.delete()
-
-async def handle_profile_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    page = context.user_data.get("profile_page", 0)
-    
-    if "next_profile_page" in query.data:
-        context.user_data["profile_page"] = page + 1
-    elif "prev_profile_page" in query.data:
-        context.user_data["profile_page"] = max(0, page - 1)
-    
-    last_profile_message_id = context.user_data.get("last_profile_message_id")
-    if last_profile_message_id:
-        try:
-            await context.bot.delete_message(chat_id=query.message.chat_id, message_id=last_profile_message_id)
-        except Exception as e:
-            logger.error(f"خطا در حذف پیام پروفایل: {e}")
-    
-    await send_paginated_profile_games(update, context)
-
-# برگشت به لیدربرد
-async def back_to_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    last_profile_message_id = context.user_data.get("last_profile_message_id")
-    if last_profile_message_id:
-        try:
-            await context.bot.delete_message(chat_id=query.message.chat_id, message_id=last_profile_message_id)
-        except Exception as e:
-            logger.error(f"خطا در حذف پیام پروفایل: {e}")
-    
-    leaderboard = scrape_leaderboard()
-    if not leaderboard:
-        await query.message.reply_text(clean_text("مشکلی تو گرفتن لیدربرد پیش اومد! 😅"))
-        return
-    
-    message_text = clean_text("🏆 جدول امتیازات\nبرندگان برتر رتبه‌بندی هفتگی - همه بازی‌ها\n\n")
-    keyboard = []
-    keyboard.append([
-        InlineKeyboardButton("بردها 🏆", callback_data="noop"),
-        InlineKeyboardButton("آیدی بازیکن 🔖", callback_data="noop")
-    ])
-    for player in leaderboard[:10]:
-        keyboard.append([
-            InlineKeyboardButton(player['wins'], callback_data=f"leader_{player['player_id']}"),
-            InlineKeyboardButton(player['username'], callback_data=f"leader_{player['player_id']}")
-        ])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    thread_id = query.message.message_thread_id if hasattr(query.message, 'is_topic_message') and query.message.is_topic_message else None
-    message = await context.bot.send_message(
-        chat_id=query.message.chat_id,
-        text=message_text,
-        reply_markup=reply_markup,
-        message_thread_id=thread_id
-    )
-    context.user_data["last_leaderboard_message_id"] = message.message_id
-
-# تشخیص کلمات لیدربرد در گروه
-async def detect_leaderboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message_id = update.message.message_id
-    with PROCESSING_LOCK:
-        if message_id in PROCESSED_MESSAGES:
-            return
-        PROCESSED_MESSAGES.add(message_id)
-    
-    text = update.message.text.lower()
-    if "لیدربرد" in text or "لیدر برد" in text:
-        await show_weekly_leaderboard(update, context)
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id in AI_CHAT_USERS:
+        AI_CHAT_USERS.remove(user_id)
+    context.user_data.clear()
+    await update.message.reply_text(clean_text("عملیات لغو شد! 😊 هر وقت خواستی برگرد!"))
+    return ConversationHandler.END
 
 async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1430,10 +1280,8 @@ async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in AI_CHAT_USERS:
         AI_CHAT_USERS.remove(user_id)
     context.user_data.clear()
-    user_name = query.from_user.first_name
     welcome_message = clean_text(
-        f"سلام {user_name}!\nبه PlatoDex خوش اومدی - مرکز بازی‌های Plato!\n"
-        "• آیتم‌ها رو ببین 🎲\n• رتبه‌بندی بازیکن‌ها رو چک کن 🏆\n• اخبار رو دنبال کن 🎯"
+        "🏠 به منوی اصلی خوش اومدی!\n\nچی دوست داری انجام بدیم؟ 😎"
     )
     keyboard = [
         [InlineKeyboardButton("Run App 📱", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
@@ -1441,35 +1289,8 @@ async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Chat with AI 🤖", callback_data="chat_with_ai")],
         [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")]
     ]
-    # ارسال پیام جدید به جای ویرایش
-    await context.bot.send_message(
-        chat_id=query.message.chat_id,
-        text=welcome_message,
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    # حذف پیام قبلی
-    try:
-        await query.message.delete()
-    except Exception as e:
-        logger.error(f"خطا در حذف پیام قبلی: {e}")
+    await query.edit_message_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
-    user_id = update.effective_user.id
-    if user_id in AI_CHAT_USERS:
-        AI_CHAT_USERS.remove(user_id)
-    await update.message.reply_text(clean_text("عملیات لغو شد."), reply_markup=InlineKeyboardMarkup([]))
-    await start(update, context)
-    return ConversationHandler.END
-
-async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(f"خطا رخ داد: {context.error}")
-    if str(context.error) == "Query is too old and response timeout expired or query id is invalid":
-        if update and update.callback_query:
-            await update.callback_query.message.reply_text(clean_text("اوپس، یه کم دیر شد! دوباره امتحان کن 😅"))
-    elif update and update.message:
-        await update.message.reply_text(clean_text("یه مشکلی پیش اومد! 😅 دوباره امتحان کن!"))
 
 async def main():
     global application
@@ -1501,6 +1322,7 @@ async def main():
                     SEARCH_ITEM: [
                         MessageHandler(filters.TEXT & ~filters.COMMAND, process_item_search),
                         CallbackQueryHandler(select_item, pattern="^select_item_"),
+                        CallbackQueryHandler(back_to_items, pattern="^back_to_items$"),
                         CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_private$")
                     ]
                 },
@@ -1510,9 +1332,10 @@ async def main():
                     CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
                 ],
                 name="item_search",
-                persistent=False
+                persistent=False,
+                per_message=True
             )
-            
+
             image_conv_handler = ConversationHandler(
                 entry_points=[
                     CallbackQueryHandler(start_generate_image, pattern="^generate_image$"),
@@ -1528,9 +1351,10 @@ async def main():
                     CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
                 ],
                 name="image_generation",
-                persistent=False
+                persistent=False,
+                per_message=True
             )
-            
+
             group_image_conv_handler = ConversationHandler(
                 entry_points=[
                     CommandHandler("p", start_group_image, filters=filters.ChatType.GROUPS),
@@ -1542,36 +1366,26 @@ async def main():
                     CommandHandler("start", start)
                 ],
                 name="group_image_generation",
-                persistent=False
+                persistent=False,
+                per_message=True
             )
-            
-            application.add_handler(CommandHandler("start", start, filters=filters.ChatType.PRIVATE))
-            application.add_handler(CommandHandler("i", process_item_in_group, filters=filters.ChatType.GROUPS))
-            application.add_handler(CommandHandler("w", show_weekly_leaderboard, filters=filters.ChatType.GROUPS))
-            application.add_handler(CallbackQueryHandler(select_group_item, pattern="^select_group_item_"))
-            application.add_handler(CallbackQueryHandler(select_category, pattern="^select_category_"))
-            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_group"))
-            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_group_categories"))
-            application.add_handler(CallbackQueryHandler(handle_leaderboard_selection, pattern="^leader_"))
-            application.add_handler(CallbackQueryHandler(back_to_leaderboard, pattern="^back_to_leaderboard$"))
+
+            application.add_handler(CommandHandler("start", start))
+            application.add_handler(CommandHandler("cancel", cancel))
+            application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
+            application.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
             application.add_handler(search_conv_handler)
             application.add_handler(image_conv_handler)
             application.add_handler(group_image_conv_handler)
-            application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
-            application.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
             application.add_handler(InlineQueryHandler(inline_query))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
+            application.add_handler(MessageHandler(filters.Regex(r'^@PlatoDex\s+\w+'), process_item_in_group))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r'^@PlatoDex'), process_item_in_group))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_inline_selection))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(r'^@PlatoDex'), handle_ai_message))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, detect_leaderboard_command))
-            application.add_handler(MessageHandler(filters.Regex(r"🔖 نام"), handle_inline_selection))
-            application.add_error_handler(error_handler)
-            
-            logger.info("در حال آماده‌سازی ربات...")
-            await application.initialize()
-            logger.info("در حال شروع ربات...")
-            await application.start()
-            
-            config = uvicorn.Config(app, host="0.0.0.0", port=8000)
+
+            port = int(os.getenv("PORT", 8000))
+            config = uvicorn.Config(app, host="0.0.0.0", port=port)
             server = uvicorn.Server(config)
             await server.serve()
             

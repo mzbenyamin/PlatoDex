@@ -16,6 +16,7 @@ import os
 from threading import Lock
 import random
 from typing import List, Dict, Optional, Union
+import uvicorn
 
 # تنظیم لاگ
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -1333,7 +1334,6 @@ async def main():
                 ],
                 name="item_search",
                 persistent=False,
-                per_message=True
             )
 
             image_conv_handler = ConversationHandler(
@@ -1352,7 +1352,6 @@ async def main():
                 ],
                 name="image_generation",
                 persistent=False,
-                per_message=True
             )
 
             group_image_conv_handler = ConversationHandler(
@@ -1367,7 +1366,6 @@ async def main():
                 ],
                 name="group_image_generation",
                 persistent=False,
-                per_message=True
             )
 
             application.add_handler(CommandHandler("start", start))

@@ -1300,18 +1300,27 @@ async def main():
     
     for attempt in range(max_retries):
         try:
+            # ساخت Application
             application = Application.builder().token(TOKEN).read_timeout(60).write_timeout(60).connect_timeout(60).build()
             
+            # مقداردهی اولیه Application
+            await application.initialize()
+            logger.info("Application با موفقیت مقداردهی شد.")
+            
+            # بررسی فعال بودن JobQueue
             if application.job_queue is None:
                 logger.error("JobQueue فعال نیست!")
                 raise RuntimeError("JobQueue فعال نیست!")
             
+            # تنظیم Webhook
             await application.bot.set_webhook(url=WEBHOOK_URL)
             logger.info(f"Webhook روی {WEBHOOK_URL} تنظیم شد.")
             
+            # زمان‌بندی اسکرپینگ
             schedule_scraping(application)
             await extract_items()
             
+            # ثبت ConversationHandler‌ها
             search_conv_handler = ConversationHandler(
                 entry_points=[CallbackQueryHandler(start_item_search, pattern="^search_items$")],
                 states={
@@ -1333,7 +1342,7 @@ async def main():
                     CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
                 ],
                 name="item_search",
-                persistent=False,
+                persistent=False
             )
 
             image_conv_handler = ConversationHandler(
@@ -1351,7 +1360,7 @@ async def main():
                     CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
                 ],
                 name="image_generation",
-                persistent=False,
+                persistent=False
             )
 
             group_image_conv_handler = ConversationHandler(
@@ -1365,28 +1374,30 @@ async def main():
                     CommandHandler("start", start)
                 ],
                 name="group_image_generation",
-                persistent=False,
+                persistent=False
             )
 
+            # ثبت Handlerها
             application.add_handler(CommandHandler("start", start))
             application.add_handler(CommandHandler("cancel", cancel))
             application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
-            application.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
             application.add_handler(search_conv_handler)
             application.add_handler(image_conv_handler)
             application.add_handler(group_image_conv_handler)
             application.add_handler(InlineQueryHandler(inline_query))
-            application.add_handler(MessageHandler(filters.Regex(r'^@PlatoDex\s+\w+'), process_item_in_group))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r'^@PlatoDex'), process_item_in_group))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_inline_selection))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex(r'^@PlatoDex'), handle_ai_message))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r'^@PlatoDex\s+\w+'), handle_inline_selection))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
+            application.add_handler(CommandHandler("item", process_item_in_group, filters=filters.ChatType.GROUPS))
 
+            # شروع سرور uvicorn
             port = int(os.getenv("PORT", 8000))
             config = uvicorn.Config(app, host="0.0.0.0", port=port)
             server = uvicorn.Server(config)
             await server.serve()
-            
+
+            return  # موفقیت، خروج از حلقه
+
         except Exception as e:
             logger.error(f"خطا در تلاش {attempt + 1}/{max_retries}: {e}")
             if attempt < max_retries - 1:

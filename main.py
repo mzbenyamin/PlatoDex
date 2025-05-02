@@ -13,7 +13,6 @@ from PIL import Image
 import io
 import tempfile
 import os
-from threading import Lock
 import random
 from typing import List, Dict, Optional, Union
 import uvicorn
@@ -35,7 +34,7 @@ SEARCH_ITEM, SELECT_CATEGORY = range(2)
 SELECT_SIZE, GET_PROMPT = range(2, 4)
 DEFAULT_CHAT_ID = 789912945
 PROCESSED_MESSAGES = set()
-PROCESSING_LOCK = Lock()
+PROCESSING_LOCK = asyncio.Lock()  # تغییر به asyncio.Lock
 
 # پیام سیستم (خالی برای وارد کردن دستی)
 SYSTEM_MESSAGE = (

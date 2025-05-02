@@ -823,9 +823,17 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
         thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
         message = await update.message.reply_text(message_text, reply_markup=reply_markup, message_thread_id=thread_id)
     elif update.callback_query:
-        message = await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
+        try:
+            message = await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
+        except telegram.error.BadRequest as e:
+            if "Message to edit not found" in str(e):
+                logger.warning(f"پیام برای ویرایش پیدا نشد، ارسال پیام جدید: {e}")
+                message = await update.callback_query.message.reply_text(message_text, reply_markup=reply_markup)
+            else:
+                raise
     else:
         message = await update.message.reply_text(message_text, reply_markup=reply_markup)
+    
     context.user_data["last_items_message_id"] = message.message_id
 
 async def send_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, item, audio_info, index, reply_markup=None, thread_id=None):
@@ -929,8 +937,17 @@ async def back_to_items(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if last_item_message_id:
         try:
             await context.bot.delete_message(chat_id=query.message.chat_id, message_id=last_item_message_id)
+            logger.info(f"پیام آیتم با ID {last_item_message_id} حذف شد.")
         except Exception as e:
             logger.error(f"خطا در حذف پیام آیتم: {e}")
+    
+    last_items_message_id = context.user_data.get("last_items_message_id")
+    if last_items_message_id:
+        try:
+            await context.bot.delete_message(chat_id=query.message.chat_id, message_id=last_items_message_id)
+            logger.info(f"پیام لیست آیتم‌ها با ID {last_items_message_id} حذف شد.")
+        except Exception as e:
+            logger.error(f"خطا در حذف پیام لیست آیتم‌ها: {e}")
     
     await send_paginated_items(update, context, is_group=False)
     return SEARCH_ITEM
@@ -1038,7 +1055,14 @@ async def send_paginated_categories(update: Update, context: ContextTypes.DEFAUL
         thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
         await update.message.reply_text(message_text, reply_markup=reply_markup, message_thread_id=thread_id)
     elif update.callback_query:
-        await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
+        try:
+            await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
+        except telegram.error.BadRequest as e:
+            if "Message to edit not found" in str(e):
+                logger.warning(f"پیام برای ویرایش پیدا نشد، ارسال پیام جدید: {e}")
+                await update.callback_query.message.reply_text(message_text, reply_markup=reply_markup)
+            else:
+                raise
     else:
         await update.message.reply_text(message_text, reply_markup=reply_markup)
 
@@ -1293,6 +1317,11 @@ async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
 
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(f"خطا در پردازش آپدیت: {context.error}")
+    if update and update.effective_message:
+        await update.effective_message.reply_text(clean_text("مشکلی پیش اومد! 😅 لطفاً دوباره امتحان کنید."))
+
 async def main():
     global application
     max_retries = 3
@@ -1300,27 +1329,21 @@ async def main():
     
     for attempt in range(max_retries):
         try:
-            # ساخت Application
             application = Application.builder().token(TOKEN).read_timeout(60).write_timeout(60).connect_timeout(60).build()
             
-            # مقداردهی اولیه Application
             await application.initialize()
             logger.info("Application با موفقیت مقداردهی شد.")
             
-            # بررسی فعال بودن JobQueue
             if application.job_queue is None:
                 logger.error("JobQueue فعال نیست!")
                 raise RuntimeError("JobQueue فعال نیست!")
             
-            # تنظیم Webhook
             await application.bot.set_webhook(url=WEBHOOK_URL)
             logger.info(f"Webhook روی {WEBHOOK_URL} تنظیم شد.")
             
-            # زمان‌بندی اسکرپینگ
             schedule_scraping(application)
             await extract_items()
             
-            # ثبت ConversationHandler‌ها
             search_conv_handler = ConversationHandler(
                 entry_points=[CallbackQueryHandler(start_item_search, pattern="^search_items$")],
                 states={
@@ -1377,7 +1400,6 @@ async def main():
                 persistent=False
             )
 
-            # ثبت Handlerها
             application.add_handler(CommandHandler("start", start))
             application.add_handler(CommandHandler("cancel", cancel))
             application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
@@ -1389,14 +1411,14 @@ async def main():
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
             application.add_handler(CommandHandler("item", process_item_in_group, filters=filters.ChatType.GROUPS))
+            application.add_error_handler(error_handler)
 
-            # شروع سرور uvicorn
             port = int(os.getenv("PORT", 8000))
             config = uvicorn.Config(app, host="0.0.0.0", port=port)
             server = uvicorn.Server(config)
             await server.serve()
 
-            return  # موفقیت، خروج از حلقه
+            return
 
         except Exception as e:
             logger.error(f"خطا در تلاش {attempt + 1}/{max_retries}: {e}")

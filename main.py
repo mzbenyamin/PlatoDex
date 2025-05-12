@@ -1624,7 +1624,7 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
         price_info = clean_text(f"{item['price']['value']} {price_type}")
         button_text = clean_text(f"{i}. {item['name']} - {price_info}")
         # Always include group flag in the callback data for consistency 
-        callback_data = f"select{'_group' if is_group else ''}_item_{item['id']}"
+        callback_data = f"{'select_group_item' if is_group else 'select_item'}_{item['id']}"
         keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
     
     # Navigation buttons
@@ -2012,7 +2012,11 @@ async def send_paginated_categories(update: Update, context: ContextTypes.DEFAUL
     
     keyboard = []
     for i, category in enumerate(current_categories, start_idx + 1):
-        callback_data = f"select_category_{category}"
+        # Add _group suffix for group callbacks to ensure proper handling
+        if is_group:
+            callback_data = f"select_category_group_{category}"
+        else:
+            callback_data = f"select_category_{category}"
         keyboard.append([InlineKeyboardButton(clean_text(f"{i}. {category}"), callback_data=callback_data)])
     
     nav_buttons = []
@@ -2139,7 +2143,12 @@ async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check if this is a group interaction
     is_group = "group" in query.data or context.user_data.get("is_group_interaction", False)
     
-    category = query.data.replace("select_category_", "")
+    # Extract category name from callback data, handling both formats
+    if "select_category_group_" in query.data:
+        category = query.data.replace("select_category_group_", "")
+    else:
+        category = query.data.replace("select_category_", "")
+        
     matching_items = [item for item in EXTRACTED_ITEMS if item["category"] == category]
     
     if not matching_items:
@@ -2175,6 +2184,9 @@ async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Store the matched items
     context.user_data["matching_items"] = matching_items
     context.user_data["page"] = 0
+    
+    # Log for debugging
+    logger.info(f"Category selected: {category}, is_group: {is_group}, found {len(matching_items)} items")
     
     # Send the paginated items
     await send_paginated_items(update, context, is_group=is_group)
@@ -2323,7 +2335,8 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     # Send a new categories list
                     await send_paginated_categories(update, context, is_group=is_group)
             
-            return SELECT_CATEGORY if not is_group else None
+            # Always return SELECT_CATEGORY for conversation handling in both private and groups
+            return SELECT_CATEGORY
         else:
             if "next_page" in query.data:
                 context.user_data["page"] = page + 1
@@ -2359,7 +2372,8 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             )
                             await send_paginated_items(update, context, is_group=is_group)
             
-            return SEARCH_ITEM if not is_group else None
+            # Always return SEARCH_ITEM for conversation handling in both private and groups
+            return SEARCH_ITEM
     except Exception as e:
         logger.error(f"Error in handle_pagination: {e}")
         if update.callback_query and update.callback_query.message:
@@ -2616,6 +2630,14 @@ async def main():
             application.add_handler(CommandHandler("i", process_item_in_group, filters=filters.ChatType.GROUPS))
             application.add_handler(CommandHandler("w", show_leaderboard, filters=filters.ChatType.GROUPS))
             application.add_handler(CallbackQueryHandler(select_group_item, pattern="^select_group_item_"))
+            
+            # Add these handlers for group interactions
+            application.add_handler(CallbackQueryHandler(select_category, pattern="^select_category_"))
+            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^prev_page_group"))
+            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^next_page_group"))
+            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^prev_page_private"))
+            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^next_page_private"))
+            
             application.add_error_handler(error_handler)
 
             port = int(os.getenv("PORT", 8000))

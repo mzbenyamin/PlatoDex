@@ -2231,28 +2231,78 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         async with PROCESSING_LOCK:
             if item["images"]:
                 image_url = item["images"][0]
-                if image_url.lower().endswith('.webp'):
-                    async def process_webp():
+                # Treat all images as potentially animatable - this will ensure we properly handle all formats
+                async def process_image():
+                    try:
+                        logger.info(f"Processing image: {image_url}")
+                        response = requests.get(image_url, timeout=30)
+                        response.raise_for_status()
+                        
+                        # Save the original image data
+                        img_data = io.BytesIO(response.content)
+                        
+                        # Create a buffer for the processed image (GIF)
+                        gif_buffer = io.BytesIO()
+                        
                         try:
-                            response = requests.get(image_url, timeout=20)
-                            response.raise_for_status()
-                            img = Image.open(io.BytesIO(response.content))
-                            gif_buffer = io.BytesIO()
-                            if img.mode != 'RGBA':
+                            # Attempt to open the image with Pillow
+                            img = Image.open(img_data)
+                            
+                            # Check if it's an animated image (has multiple frames)
+                            is_animated = hasattr(img, "n_frames") and img.n_frames > 1
+                            logger.info(f"Image format: {img.format}, Mode: {img.mode}, Animated: {is_animated}")
+                            
+                            # Convert to proper mode for GIF
+                            if img.mode not in ['RGB', 'RGBA', 'P']:
                                 img = img.convert('RGBA')
-                            img.save(gif_buffer, format='GIF', save_all=True, optimize=True)
+                            
+                            # For non-animated images, create a basic animation
+                            if not is_animated:
+                                # Create a slightly modified copy for frame 2
+                                frame2 = img.copy()
+                                
+                                # For better results, save the image as GIF with animation
+                                img.save(
+                                    gif_buffer, 
+                                    format='GIF', 
+                                    save_all=True, 
+                                    append_images=[frame2], 
+                                    optimize=False,
+                                    disposal=2,
+                                    duration=500,  # 500ms delay
+                                    loop=0         # loop forever
+                                )
+                            else:
+                                # For already animated images, preserve animation
+                                img.save(
+                                    gif_buffer, 
+                                    format='GIF', 
+                                    save_all=True, 
+                                    optimize=False,
+                                    disposal=2,
+                                    duration=100,  # 100ms delay per frame
+                                    loop=0         # loop forever
+                                )
+                                
+                            # Reset buffer position
                             gif_buffer.seek(0)
+                            
+                            # Create input file for Telegram
                             input_file = InputFile(gif_buffer, filename="animation.gif")
                             
-                            # Use direct send instead of reply to avoid "Message to be replied not found" error
+                            # Send the animation
                             chat_id = query.message.chat_id
-                            await context.bot.send_animation(
+                            sent_message = await context.bot.send_animation(
                                 chat_id=chat_id,
                                 animation=input_file,
                                 caption=results_text,
                                 message_thread_id=thread_id
                             )
                             
+                            # Log success
+                            logger.info(f"Successfully sent GIF animation for {image_url}")
+                            
+                            # Process audio attachments
                             for i, audio_info in enumerate(item["audios"], 1):
                                 await send_audio(update, context, item, audio_info, i, None, thread_id)
                                 
@@ -2260,35 +2310,53 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             try:
                                 await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
                             except Exception as e:
-                                logger.warning(f"Could not delete original message after WebP conversion: {e}")
-                        except Exception as e:
-                            logger.error(f"خطا در تبدیل WebP: {e}")
+                                logger.warning(f"Could not delete original message after image conversion: {e}")
+                            
+                            return sent_message
+                        
+                        except Exception as img_e:
+                            # If conversion fails, fallback to sending as photo
+                            logger.error(f"Error converting image to GIF: {img_e}")
+                            
+                            # Reset the original image data
+                            img_data.seek(0)
+                            
+                            # Send as regular photo
+                            chat_id = query.message.chat_id
+                            sent_message = await context.bot.send_photo(
+                                chat_id=chat_id,
+                                photo=InputFile(img_data, filename="image.jpg"),
+                                caption=results_text,
+                                message_thread_id=thread_id
+                            )
+                            
+                            # Process audio attachments
+                            for i, audio_info in enumerate(item["audios"], 1):
+                                await send_audio(update, context, item, audio_info, i, None, thread_id)
+                                
+                            # Try to delete the original message
                             try:
-                                # Use direct send instead of reply
-                                await context.bot.send_message(
-                                    chat_id=query.message.chat_id,
-                                    text=clean_text("مشکلی توی ارسال عکس پیش اومد! 😅"),
-                                    message_thread_id=thread_id
-                                )
-                            except Exception as inner_e:
-                                logger.error(f"Error sending error message for WebP: {inner_e}")
-                    asyncio.create_task(process_webp())
-                elif image_url.lower().endswith('.gif'):
-                    await query.message.reply_animation(
-                        animation=image_url,
-                        caption=results_text,
-                        message_thread_id=thread_id
-                    )
-                    for i, audio_info in enumerate(item["audios"], 1):
-                        await send_audio(update, context, item, audio_info, i, None, thread_id)
-                else:
-                    await query.message.reply_photo(
-                        photo=image_url,
-                        caption=results_text,
-                        message_thread_id=thread_id
-                    )
-                    for i, audio_info in enumerate(item["audios"], 1):
-                        await send_audio(update, context, item, audio_info, i, None, thread_id)
+                                await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
+                            except Exception as e:
+                                logger.warning(f"Could not delete original message after fallback to photo: {e}")
+                            
+                            return sent_message
+                            
+                    except Exception as e:
+                        logger.error(f"خطا در پردازش تصویر: {e}")
+                        try:
+                            # Use direct send instead of reply
+                            await context.bot.send_message(
+                                chat_id=query.message.chat_id,
+                                text=clean_text(f"مشکلی توی ارسال تصویر پیش اومد! 😅 خطا: {str(e)[:50]}..."),
+                                message_thread_id=thread_id
+                            )
+                        except Exception as inner_e:
+                            logger.error(f"Error sending error message for image: {inner_e}")
+                
+                # Process the image asynchronously
+                asyncio.create_task(process_image())
+                
             else:
                 await query.message.reply_text(results_text, message_thread_id=thread_id)
             

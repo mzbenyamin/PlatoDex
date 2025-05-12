@@ -558,6 +558,10 @@ async def webhook(request: Request):
 async def root():
     return {"message": "PlatoDex Bot is running!"}
 
+@app.head("/webhook")
+async def webhook_head():
+    return {"status": "online"}
+
 def clean_text(text):
     if not text:
         return ""

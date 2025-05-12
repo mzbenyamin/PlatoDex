@@ -1235,9 +1235,19 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
             )
         return
 
-    page = context.user_data.get("page", 0)
+    # When returning from an item detail view, use the stored page number
+    if "back_to_items" in (update.callback_query.data if update.callback_query else ""):
+        page = context.user_data.get("previous_page", 0)
+        context.user_data["page"] = page
+    else:
+        page = context.user_data.get("page", 0)
+    
     items_per_page = 10
-    total_pages = (len(matching_items) + items_per_page - 1) // items_per_page
+    total_pages = max(1, (len(matching_items) + items_per_page - 1) // items_per_page)
+    
+    # Ensure page is within valid range
+    page = max(0, min(page, total_pages - 1))
+    context.user_data["page"] = page
     
     start_idx = page * items_per_page
     end_idx = min((page + 1) * items_per_page, len(matching_items))
@@ -1259,40 +1269,40 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
         keyboard = [[InlineKeyboardButton("↩️ برگشت به لیست آیتم‌ها", callback_data="back_to_items")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        # Clear any existing item message ID first
-        last_item_message_id = context.user_data.get("last_item_message_id")
-        if last_item_message_id:
-            try:
-                if update.message:
-                    await context.bot.delete_message(chat_id=update.message.chat_id, message_id=last_item_message_id)
-                elif update.callback_query:
-                    await context.bot.delete_message(chat_id=update.callback_query.message.chat_id, message_id=last_item_message_id)
-            except Exception:
-                pass  # Silently ignore if already deleted
-        
-        # Send new item details
         try:
+            # Send item details directly
+            message = None
             if update.message:
                 if item["images"]:
                     message = await update.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup)
                 else:
                     message = await update.message.reply_text(results_text, reply_markup=reply_markup)
             elif update.callback_query and update.callback_query.message:
+                chat_id = update.callback_query.message.chat_id
                 if item["images"]:
-                    message = await update.callback_query.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup)
+                    message = await context.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=item["images"][0],
+                        caption=results_text,
+                        reply_markup=reply_markup
+                    )
                 else:
-                    message = await update.callback_query.message.reply_text(results_text, reply_markup=reply_markup)
-            else:
-                logger.warning("No appropriate message object found to reply to")
-                return
-                
-            context.user_data["last_item_message_id"] = message.message_id
-            for i, audio_info in enumerate(item["audios"], 1):
-                await send_audio(update, context, item, audio_info, i, reply_markup)
+                    message = await context.bot.send_message(
+                        chat_id=chat_id,
+                        text=results_text,
+                        reply_markup=reply_markup
+                    )
+            
+            if message:
+                context.user_data["current_item_message_id"] = message.message_id
+                for i, audio_info in enumerate(item["audios"], 1):
+                    await send_audio(update, context, item, audio_info, i, reply_markup)
         except Exception as e:
-            logger.error(f"Error sending item details: {e}")
+            logger.error(f"Error sending single item: {e}")
+            
         return
     
+    # Building keyboard with items
     keyboard = []
     for i, item in enumerate(current_items, start_idx + 1):
         price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
@@ -1301,6 +1311,7 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
         callback_data = f"select{'_group' if is_group else ''}_item_{item['id']}"
         keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
     
+    # Navigation buttons
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"prev_page_{'group' if is_group else 'private'}"))
@@ -1315,42 +1326,49 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
     message_text = clean_text(f"این آیتم‌ها رو پیدا کردم (صفحه {page + 1} از {total_pages})، کدوم رو می‌خوای؟ 👇")
     
     try:
-        async with PROCESSING_LOCK:
-            if is_group and update.message:
-                thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
-                message = await update.message.reply_text(message_text, reply_markup=reply_markup, message_thread_id=thread_id)
-                context.user_data["last_items_message_id"] = message.message_id
-            elif update.callback_query:
-                try:
-                    # Try to edit existing message
-                    await update.callback_query.message.edit_text(message_text, reply_markup=reply_markup)
-                    context.user_data["last_items_message_id"] = update.callback_query.message.message_id
-                except error.BadRequest as e:
-                    # If editing fails, send a new message
-                    if "Message to edit not found" in str(e) or "There is no text in the message to edit" in str(e):
-                        logger.warning(f"Could not edit message, sending new one: {e}")
-                        message = await update.callback_query.message.reply_text(message_text, reply_markup=reply_markup)
-                        context.user_data["last_items_message_id"] = message.message_id
-                    else:
-                        # For other errors, re-raise
-                        raise
-            else:
-                message = await update.message.reply_text(message_text, reply_markup=reply_markup)
-                context.user_data["last_items_message_id"] = message.message_id
+        if is_group and update.message:
+            thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
+            message = await update.message.reply_text(message_text, reply_markup=reply_markup, message_thread_id=thread_id)
+            context.user_data["items_list_message_id"] = message.message_id
+        elif update.callback_query and "back_to_items" in update.callback_query.data:
+            # When coming back from item details, always send a new message
+            message = await context.bot.send_message(
+                chat_id=update.callback_query.message.chat_id,
+                text=message_text,
+                reply_markup=reply_markup
+            )
+            context.user_data["items_list_message_id"] = message.message_id
+        elif update.callback_query:
+            try:
+                # Try to edit existing message
+                await update.callback_query.message.edit_text(message_text, reply_markup=reply_markup)
+                context.user_data["items_list_message_id"] = update.callback_query.message.message_id
+            except error.BadRequest as e:
+                # If editing fails, send a new message
+                if "Message to edit not found" in str(e) or "There is no text in the message to edit" in str(e):
+                    logger.warning(f"Could not edit message, sending new one: {e}")
+                    message = await context.bot.send_message(
+                        chat_id=update.callback_query.message.chat_id,
+                        text=message_text,
+                        reply_markup=reply_markup
+                    )
+                    context.user_data["items_list_message_id"] = message.message_id
+                else:
+                    # For other errors, re-raise
+                    raise
+        else:
+            message = await update.message.reply_text(message_text, reply_markup=reply_markup)
+            context.user_data["items_list_message_id"] = message.message_id
     except Exception as e:
         # Last resort error handling
         logger.error(f"Error in send_paginated_items: {e}")
         try:
-            if update.callback_query and update.callback_query.message:
-                await update.callback_query.message.reply_text(
-                    clean_text("مشکلی در نمایش آیتم‌ها پیش آمد. لطفاً دوباره امتحان کنید."),
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]])
-                )
-            elif update.message:
-                await update.message.reply_text(
-                    clean_text("مشکلی در نمایش آیتم‌ها پیش آمد. لطفاً دوباره امتحان کنید."),
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]])
-                )
+            chat_id = update.callback_query.message.chat_id if update.callback_query else update.message.chat_id
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=clean_text("مشکلی در نمایش آیتم‌ها پیش آمد. لطفاً دوباره امتحان کنید."),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]])
+            )
         except Exception:
             pass  # If even this fails, just silently give up
 
@@ -1405,6 +1423,9 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(clean_text("آیتم پیدا نشد! 😕"))
         return SEARCH_ITEM
     
+    # Save the current state so we can restore it when going back
+    context.user_data["previous_page"] = context.user_data.get("page", 0)
+    
     price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
     price_info = clean_text(f"{item['price']['value']} {price_type}")
     results_text = (
@@ -1421,59 +1442,50 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     try:
-        async with PROCESSING_LOCK:
-            # Try to delete any existing item message first
-            last_item_message_id = context.user_data.get("last_item_message_id")
-            if last_item_message_id:
-                try:
-                    await context.bot.delete_message(chat_id=query.message.chat_id, message_id=last_item_message_id)
-                    logger.info(f"Deleted previous item message with ID {last_item_message_id}")
-                except Exception as e:
-                    logger.warning(f"Could not delete previous item message: {e}")
-            
-            # Send new item message
-            if item["images"]:
-                message = await context.bot.send_photo(
-                    chat_id=query.message.chat_id,
-                    photo=item["images"][0],
-                    caption=results_text,
-                    reply_markup=reply_markup
-                )
-            else:
-                message = await context.bot.send_message(
-                    chat_id=query.message.chat_id,
-                    text=results_text,
-                    reply_markup=reply_markup
-                )
-            context.user_data["last_item_message_id"] = message.message_id
+        # Try to delete the items list message first
+        items_list_message_id = query.message.message_id
+        try:
+            await context.bot.delete_message(chat_id=query.message.chat_id, message_id=items_list_message_id)
+            logger.info(f"Deleted items list message with ID {items_list_message_id}")
+        except Exception as e:
+            logger.warning(f"Could not delete items list message: {e}")
         
-            for i, audio_info in enumerate(item["audios"], 1):
-                await send_audio(update, context, item, audio_info, i, reply_markup)
+        # Send the item details as a new message
+        if item["images"]:
+            # For items with images, send a photo with caption
+            message = await context.bot.send_photo(
+                chat_id=query.message.chat_id,
+                photo=item["images"][0],
+                caption=results_text,
+                reply_markup=reply_markup
+            )
+        else:
+            # For items without images, send a text message
+            message = await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=results_text,
+                reply_markup=reply_markup
+            )
         
-            # Try to delete items list message (safely)
-            last_items_message_id = context.user_data.get("last_items_message_id")
-            if last_items_message_id and last_items_message_id != query.message.message_id:
-                try:
-                    await context.bot.delete_message(chat_id=query.message.chat_id, message_id=last_items_message_id)
-                    logger.info(f"Deleted items list message with ID {last_items_message_id}")
-                except Exception as e:
-                    logger.warning(f"Could not delete items list message: {e}")
-            
-            # Always try to delete the current message last
-            try:
-                await context.bot.delete_message(chat_id=query.message.chat_id, message_id=query.message.message_id)
-            except Exception as e:
-                logger.warning(f"Could not delete current message: {e}")
+        # Store the current item message ID for future reference
+        context.user_data["current_item_message_id"] = message.message_id
+        
+        # Send audio attachments if any
+        for i, audio_info in enumerate(item["audios"], 1):
+            await send_audio(update, context, item, audio_info, i, reply_markup)
     
     except Exception as e:
         logger.error(f"Error in select_item: {e}")
         try:
-            await query.message.reply_text(
-                clean_text("مشکلی در نمایش جزئیات آیتم پیش آمد. لطفاً دوباره امتحان کنید."),
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]])
+            # Fallback message if everything else fails
+            keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=clean_text("مشکلی در نمایش جزئیات آیتم پیش آمد. لطفاً دوباره امتحان کنید."),
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
         except Exception:
-            pass
+            pass  # If even this fails, just silently give up
     
     return SEARCH_ITEM
 
@@ -1481,43 +1493,55 @@ async def back_to_items(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
-    async with PROCESSING_LOCK:
-        # Safely delete item message if it exists
-        last_item_message_id = context.user_data.get("last_item_message_id")
-        if last_item_message_id:
-            try:
-                await context.bot.delete_message(chat_id=query.message.chat_id, message_id=last_item_message_id)
-                logger.info(f"پیام آیتم با ID {last_item_message_id} حذف شد.")
-            except Exception as e:
-                logger.warning(f"پیام آیتم با ID {last_item_message_id} پیدا نشد: {e}")
-            # Always remove the ID from user_data, even if deletion fails
-            context.user_data.pop("last_item_message_id", None)
+    try:
+        # Don't try to edit the current message if it's a photo message
+        # Instead, always send a new message with the items list
+        current_message = query.message
+        chat_id = current_message.chat_id
         
-        # Check if the current message exists and can be responded to
+        # First, try to delete the current item display message
         try:
-            # Instead of trying to delete the items message, just use the current message
+            await context.bot.delete_message(chat_id=chat_id, message_id=current_message.message_id)
+            logger.info(f"Deleted item display message with ID {current_message.message_id}")
+        except Exception as e:
+            logger.warning(f"Could not delete item display message: {e}")
+        
+        # Send a new message with the items list
+        if "matching_items" in context.user_data:
+            message_text = clean_text("نمایش لیست آیتم‌ها...")
+            temp_message = await context.bot.send_message(
+                chat_id=chat_id,
+                text=message_text
+            )
+            
+            # Now send the actual items list
             await send_paginated_items(update, context, is_group=False)
-            # After successful sending, store the new message ID if possible
-            if "last_items_message_id" in context.user_data:
-                if context.user_data["last_items_message_id"] != query.message.message_id:
-                    try:
-                        await context.bot.delete_message(
-                            chat_id=query.message.chat_id, 
-                            message_id=context.user_data["last_items_message_id"]
-                        )
-                    except Exception:
-                        pass  # Silently ignore if already deleted
-        except error.BadRequest as e:
-            logger.warning(f"Error in back_to_items: {e}")
-            # If we can't use the current message, send a new one
-            keyboard = [
-                [InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]
-            ]
-            await query.message.reply_text(
-                clean_text("برگشت به لیست آیتم‌ها..."), 
+            
+            # Clean up the temporary message
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=temp_message.message_id)
+            except Exception:
+                pass
+        else:
+            # If there are no matching items in user_data, go back to home
+            keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=clean_text("متأسفانه لیست آیتم‌ها از دست رفته است. به منوی اصلی برگردید."),
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
-            await send_paginated_items(update, context, is_group=False)
+    except Exception as e:
+        logger.error(f"Error in back_to_items: {e}")
+        try:
+            # Fallback message if everything else fails
+            keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=clean_text("مشکلی در بازگشت به لیست آیتم‌ها پیش آمد. لطفاً دوباره امتحان کنید."),
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        except Exception:
+            pass  # If even this fails, just give up silently
     
     return SEARCH_ITEM
 

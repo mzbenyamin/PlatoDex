@@ -1224,6 +1224,11 @@ async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE
     return SEARCH_ITEM
 
 async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYPE, is_group=False):
+    # Check if we have an explicitly saved group interaction state
+    is_group = is_group or context.user_data.get("is_group_interaction", False)
+    group_chat_id = context.user_data.get("group_chat_id", None)
+    group_thread_id = context.user_data.get("group_thread_id", None)
+    
     matching_items = context.user_data.get("matching_items", [])
     if not matching_items:
         logger.warning("No matching items found in user_data")
@@ -1236,7 +1241,7 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     # When returning from an item detail view, use the stored page number
-    if "back_to_items" in (update.callback_query.data if update.callback_query else ""):
+    if update.callback_query and "back_to_items" in update.callback_query.data:
         page = context.user_data.get("previous_page", 0)
         context.user_data["page"] = page
     else:
@@ -1308,12 +1313,14 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
         price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
         price_info = clean_text(f"{item['price']['value']} {price_type}")
         button_text = clean_text(f"{i}. {item['name']} - {price_info}")
+        # Always include group flag in the callback data for consistency 
         callback_data = f"select{'_group' if is_group else ''}_item_{item['id']}"
         keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
     
     # Navigation buttons
     nav_buttons = []
     if page > 0:
+        # Include group flag consistently in pagination callbacks
         nav_buttons.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"prev_page_{'group' if is_group else 'private'}"))
     if page < total_pages - 1:
         nav_buttons.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"next_page_{'group' if is_group else 'private'}"))
@@ -1327,9 +1334,45 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
     
     try:
         if is_group and update.message:
+            # Handle original group command
             thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
             message = await update.message.reply_text(message_text, reply_markup=reply_markup, message_thread_id=thread_id)
             context.user_data["items_list_message_id"] = message.message_id
+            logger.info(f"Sent items list page {page+1}/{total_pages} in group")
+        elif is_group and update.callback_query:
+            # Handle group callback (pagination/selection)
+            thread_id = group_thread_id
+            
+            # For group callbacks, send a new message instead of editing
+            chat_id = update.callback_query.message.chat_id
+            try:
+                message = await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=message_text,
+                    reply_markup=reply_markup,
+                    message_thread_id=thread_id
+                )
+                context.user_data["items_list_message_id"] = message.message_id
+                logger.info(f"Sent new items list page {page+1}/{total_pages} in group after pagination")
+                
+                # Try to delete the previous message to keep the chat clean
+                try:
+                    await context.bot.delete_message(
+                        chat_id=chat_id, 
+                        message_id=update.callback_query.message.message_id
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not delete previous message in group: {e}")
+            except Exception as e:
+                logger.error(f"Error sending new message in group: {e}")
+                # Fallback to trying to edit the message
+                try:
+                    await update.callback_query.message.edit_text(
+                        text=message_text,
+                        reply_markup=reply_markup
+                    )
+                except Exception as edit_error:
+                    logger.error(f"Error editing message in group: {edit_error}")
         elif update.callback_query and "back_to_items" in update.callback_query.data:
             # When coming back from item details, always send a new message
             message = await context.bot.send_message(
@@ -1363,12 +1406,20 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
         # Last resort error handling
         logger.error(f"Error in send_paginated_items: {e}")
         try:
-            chat_id = update.callback_query.message.chat_id if update.callback_query else update.message.chat_id
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=clean_text("مشکلی در نمایش آیتم‌ها پیش آمد. لطفاً دوباره امتحان کنید."),
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]])
-            )
+            chat_id = None
+            if update.callback_query and update.callback_query.message:
+                chat_id = update.callback_query.message.chat_id
+            elif update.message:
+                chat_id = update.message.chat_id
+            
+            if chat_id:
+                thread_id = group_thread_id if is_group else None
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=clean_text("مشکلی در نمایش آیتم‌ها پیش آمد. لطفاً دوباره امتحان کنید."),
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]),
+                    message_thread_id=thread_id
+                )
         except Exception:
             pass  # If even this fails, just silently give up
 
@@ -1566,6 +1617,11 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
     
     thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
     
+    # Mark this as a group interaction in the user data
+    context.user_data["is_group_interaction"] = True
+    context.user_data["group_chat_id"] = chat_id
+    context.user_data["group_thread_id"] = thread_id
+    
     if not context.args:
         categories = sorted(set(item["category"] for item in EXTRACTED_ITEMS))
         context.user_data["categories"] = categories
@@ -1617,6 +1673,10 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
         await send_paginated_items(update, context, is_group=True)
 
 async def send_paginated_categories(update: Update, context: ContextTypes.DEFAULT_TYPE, is_group=False):
+    # Check if we have an explicitly saved group interaction state
+    is_group = is_group or context.user_data.get("is_group_interaction", False)
+    group_thread_id = context.user_data.get("group_thread_id", None)
+    
     categories = context.user_data.get("categories", sorted(set(item["category"] for item in EXTRACTED_ITEMS)))
     if not categories:
         logger.warning("No categories found in user_data")
@@ -1660,23 +1720,49 @@ async def send_paginated_categories(update: Update, context: ContextTypes.DEFAUL
     
     try:
         if is_group and update.message:
+            # Handle original group command
             thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
             message = await update.message.reply_text(message_text, reply_markup=reply_markup, message_thread_id=thread_id)
             context.user_data["categories_message_id"] = message.message_id
             logger.info(f"Sent categories page {page + 1}/{total_pages} in group chat")
-        elif update.callback_query:
-            # For categories pagination, always send a new message to avoid edit errors with buttons
-            if any(x in update.callback_query.data for x in ["prev_page", "next_page"]):
+        elif is_group and update.callback_query:
+            # For group callbacks, send a new message instead of trying to edit
+            thread_id = group_thread_id
+            chat_id = update.callback_query.message.chat_id
+            
+            try:
                 message = await context.bot.send_message(
-                    chat_id=update.callback_query.message.chat_id,
+                    chat_id=chat_id,
                     text=message_text,
-                    reply_markup=reply_markup
+                    reply_markup=reply_markup,
+                    message_thread_id=thread_id
                 )
                 context.user_data["categories_message_id"] = message.message_id
-                logger.info(f"Sent new categories page {page + 1}/{total_pages} after pagination")
-            else:
+                logger.info(f"Sent new categories page {page + 1}/{total_pages} in group after pagination")
+                
+                # Try to delete the previous message to keep the chat clean
                 try:
-                    # Try to edit existing message for first-time category display
+                    await context.bot.delete_message(
+                        chat_id=chat_id,
+                        message_id=update.callback_query.message.message_id
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not delete previous categories message in group: {e}")
+            except Exception as e:
+                logger.error(f"Error sending new categories message in group: {e}")
+                # Fallback to trying to edit if sending fails
+                try:
+                    await update.callback_query.message.edit_text(
+                        text=message_text,
+                        reply_markup=reply_markup
+                    )
+                except Exception as edit_error:
+                    logger.error(f"Error editing categories message in group: {edit_error}")
+        elif update.callback_query:
+            # For private chat pagination, handle differently
+            if any(x in update.callback_query.data for x in ["prev_page", "next_page"]):
+                try:
+                    # Try to edit first
                     await update.callback_query.message.edit_text(message_text, reply_markup=reply_markup)
                     context.user_data["categories_message_id"] = update.callback_query.message.message_id
                     logger.info(f"Edited message to show categories page {page + 1}/{total_pages}")
@@ -1689,7 +1775,30 @@ async def send_paginated_categories(update: Update, context: ContextTypes.DEFAUL
                         reply_markup=reply_markup
                     )
                     context.user_data["categories_message_id"] = message.message_id
+                    
+                    # Try to delete the previous message
+                    try:
+                        await context.bot.delete_message(
+                            chat_id=update.callback_query.message.chat_id,
+                            message_id=update.callback_query.message.message_id
+                        )
+                    except Exception as del_err:
+                        logger.warning(f"Could not delete previous categories message: {del_err}")
+            else:
+                # For first-time category display in private chat
+                try:
+                    await update.callback_query.message.edit_text(message_text, reply_markup=reply_markup)
+                    context.user_data["categories_message_id"] = update.callback_query.message.message_id
+                except error.BadRequest as e:
+                    logger.warning(f"Could not edit message for categories, sending new one: {e}")
+                    message = await context.bot.send_message(
+                        chat_id=update.callback_query.message.chat_id,
+                        text=message_text,
+                        reply_markup=reply_markup
+                    )
+                    context.user_data["categories_message_id"] = message.message_id
         else:
+            # First-time category display in private chat direct message
             message = await update.message.reply_text(message_text, reply_markup=reply_markup)
             context.user_data["categories_message_id"] = message.message_id
             logger.info(f"Sent categories page {page + 1}/{total_pages} in private chat")
@@ -1704,6 +1813,7 @@ async def send_paginated_categories(update: Update, context: ContextTypes.DEFAUL
                 chat_id = update.message.chat_id
             
             if chat_id:
+                thread_id = group_thread_id if is_group else None
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text=clean_text("مشکلی در نمایش دسته‌بندی‌ها پیش آمد. لطفاً دوباره امتحان کنید."),
@@ -1715,16 +1825,50 @@ async def send_paginated_categories(update: Update, context: ContextTypes.DEFAUL
 async def select_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    
+    # Check if this is a group interaction
+    is_group = "group" in query.data or context.user_data.get("is_group_interaction", False)
+    
     category = query.data.replace("select_category_", "")
     matching_items = [item for item in EXTRACTED_ITEMS if item["category"] == category]
     
     if not matching_items:
-        await query.edit_message_text(clean_text(f"هیچ آیتمی تو دسته‌بندی '{category}' پیدا نشد! 😕"))
+        try:
+            # For groups, consider thread_id
+            thread_id = context.user_data.get("group_thread_id") if is_group else None
+            message_text = clean_text(f"هیچ آیتمی تو دسته‌بندی '{category}' پیدا نشد! 😕")
+            
+            if is_group:
+                # In groups, send a new message instead of editing
+                await context.bot.send_message(
+                    chat_id=query.message.chat_id,
+                    text=message_text,
+                    message_thread_id=thread_id
+                )
+                
+                # Try to delete the old message
+                try:
+                    await context.bot.delete_message(
+                        chat_id=query.message.chat_id,
+                        message_id=query.message.message_id
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not delete category message in group: {e}")
+            else:
+                # In private chats, we can edit
+                await query.edit_message_text(message_text)
+        except Exception as e:
+            logger.error(f"Error handling empty category: {e}")
+        
         return SELECT_CATEGORY
     
+    # Store the matched items
     context.user_data["matching_items"] = matching_items
     context.user_data["page"] = 0
-    await send_paginated_items(update, context, is_group="group" in query.data)
+    
+    # Send the paginated items
+    await send_paginated_items(update, context, is_group=is_group)
+    
     return SEARCH_ITEM
 
 async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1819,14 +1963,16 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    is_group = "group" in query.data
+    
+    # Check explicitly if this is a group interaction
+    is_group = "group" in query.data or context.user_data.get("is_group_interaction", False)
     page = context.user_data.get("page", 0)
     
     try:
         # Log the callback data to help with debugging
         logger.info(f"Pagination callback data: {query.data}")
         
-        if "_categories" in query.data:  # Changed from "categories" in query.data to "_categories" in query.data
+        if "_categories" in query.data:
             if "next_page" in query.data:
                 context.user_data["page"] = page + 1
                 logger.info(f"Moving to next categories page: {page + 1}")
@@ -1834,19 +1980,38 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data["page"] = max(0, page - 1)
                 logger.info(f"Moving to previous categories page: {max(0, page - 1)}")
             
-            # Always send a new message for category navigation to avoid edit errors
-            if update.callback_query and update.callback_query.message:
-                try:
-                    # Try to delete the current message to keep the chat clean
-                    await context.bot.delete_message(
-                        chat_id=update.callback_query.message.chat_id,
-                        message_id=update.callback_query.message.message_id
-                    )
-                except Exception as e:
-                    logger.warning(f"Could not delete categories message: {e}")
+            # For groups, always send a new message instead of trying to edit
+            if is_group and update.callback_query and update.callback_query.message:
+                group_thread_id = context.user_data.get("group_thread_id")
                 
-                # Send a new categories list
-                await send_paginated_categories(update, context, is_group=is_group)
+                # Send a new categories message
+                try:
+                    await send_paginated_categories(update, context, is_group=True)
+                    
+                    # Try to delete the old message to keep chat clean
+                    try:
+                        await context.bot.delete_message(
+                            chat_id=update.callback_query.message.chat_id,
+                            message_id=update.callback_query.message.message_id
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not delete previous categories message in group: {e}")
+                except Exception as e:
+                    logger.error(f"Error sending new categories message in group: {e}")
+            else:
+                # For private chats, it's safer to use the existing method
+                if update.callback_query and update.callback_query.message:
+                    try:
+                        # Try to delete the current message to keep the chat clean
+                        await context.bot.delete_message(
+                            chat_id=update.callback_query.message.chat_id,
+                            message_id=update.callback_query.message.message_id
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not delete categories message: {e}")
+                    
+                    # Send a new categories list
+                    await send_paginated_categories(update, context, is_group=is_group)
             
             return SELECT_CATEGORY if not is_group else None
         else:
@@ -1857,35 +2022,42 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 context.user_data["page"] = max(0, page - 1)
                 logger.info(f"Moving to previous items page: {max(0, page - 1)}")
             
-            try:
-                await send_paginated_items(update, context, is_group=is_group)
-            except error.BadRequest as e:
-                logger.warning(f"Error in pagination (items): {e}")
-                # If we can't edit the message, send a new one
-                if "Message to edit not found" in str(e) or "There is no text in the message to edit" in str(e):
-                    if update.callback_query and update.callback_query.message:
-                        try:
-                            # Try to delete the current message to keep the chat clean
-                            await context.bot.delete_message(
+            # For groups, don't try to edit, just send a new message
+            if is_group:
+                # Don't try to edit in groups, just send a new message
+                await send_paginated_items(update, context, is_group=True)
+            else:
+                try:
+                    await send_paginated_items(update, context, is_group=is_group)
+                except error.BadRequest as e:
+                    logger.warning(f"Error in pagination (items): {e}")
+                    # If we can't edit the message, send a new one
+                    if "Message to edit not found" in str(e) or "There is no text in the message to edit" in str(e):
+                        if update.callback_query and update.callback_query.message:
+                            try:
+                                # Try to delete the current message
+                                await context.bot.delete_message(
+                                    chat_id=update.callback_query.message.chat_id,
+                                    message_id=update.callback_query.message.message_id
+                                )
+                            except Exception:
+                                pass
+                                
+                            await context.bot.send_message(
                                 chat_id=update.callback_query.message.chat_id,
-                                message_id=update.callback_query.message.message_id
+                                text=clean_text("نمایش آیتم‌ها...")
                             )
-                        except Exception:
-                            pass
-                            
-                        await context.bot.send_message(
-                            chat_id=update.callback_query.message.chat_id,
-                            text=clean_text("نمایش آیتم‌ها...")
-                        )
-                        await send_paginated_items(update, context, is_group=is_group)
+                            await send_paginated_items(update, context, is_group=is_group)
             
             return SEARCH_ITEM if not is_group else None
     except Exception as e:
         logger.error(f"Error in handle_pagination: {e}")
         if update.callback_query and update.callback_query.message:
+            thread_id = context.user_data.get("group_thread_id") if is_group else None
             await update.callback_query.message.reply_text(
                 clean_text("مشکلی در تغییر صفحه پیش آمد. لطفاً دوباره امتحان کنید."),
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]])
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]),
+                message_thread_id=thread_id
             )
         return SELECT_CATEGORY if "_categories" in query.data else SEARCH_ITEM
 

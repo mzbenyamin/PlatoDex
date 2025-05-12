@@ -298,16 +298,35 @@ def should_respond_or_violate(text, bot_username, user_id, username, callback):
 
 def generate_response(text, user_id, username, callback, chat_history=None):
     response_triggers = get_setting('response_triggers', '')
+    
+    # Get user's full name if available
+    user_fullname = None
+    if chat_history and len(chat_history) > 0:
+        for msg in chat_history:
+            if str(msg[0]) == str(user_id):
+                user_fullname = msg[1]  # Username is stored in index 1
+                break
+    
     logger.info(f"Generating response for {user_id} (@{username}): {text}")
+    
     history_context = ""
     if chat_history:
         history_context = "\nتاریخچه چت اخیر:\n"
         for msg in chat_history:
             history_context += f"@{msg[1]}: {msg[2]}\n"
+    
+    # Create a personalized prompt with user's information
+    user_info = f"نام و نام کاربری کاربر: @{username}" if not user_fullname else f"نام و نام کاربری کاربر: {user_fullname} (@{username})"
+    
     prompt = f"""
     شما دستیار هوشمند PlatoDex هستید و درمورد پلاتو به کاربران کمک میکنید و به صورت خودمونی جذاب و با ایموجی حرف میزنی به صورت نسل Z و کمی با طنز حرف بزن و شوخی کنه. به مشخصات آیتم‌های پلاتو دسترسی داری و می‌تونی به سوالات کاربر در مورد آیتم‌ها جواب بدی و راهنمایی کنی چطور با دستور /i مشخصات کامل رو بگیرن.
+    
+    {user_info}
+    متن و یا سوال و جواب کاربر: {text}
     تاریخچه پیام کاربران :{history_context}
+    
     به عنوان یک دستیار حرفه‌ای و دوستانه:
+    - لطفا در پاسخ از نام کاربر استفاده کن و اگر نام انگلیسی است به فارسی تبدیل کن
     - پاسخ باید کوتاه، دقیق و جذاب باشد
     - از ایموجی‌های مناسب استفاده کن
     - با لحن نسل Z و دوستانه صحبت کن
@@ -318,10 +337,10 @@ def generate_response(text, user_id, username, callback, chat_history=None):
     - اگر سوال در مورد چند اکانت است، توضیح بده که از تاریخ 28 فروردین 1404 پلاتو سرورهای قدیمی غیرفعال شده‌اند
     - اگر سوال در مورد دوستان است، توضیح بده که دیگر نمی‌توان دوستان کاربران دیگر را دید
     - اگر سوال در مورد سلاطین پلاتو است، توضیح بده که اولین رسانه فارسی‌زبون پلاتو از 1400 با مدیریت بنیامین است
-    پیام: {text}
+    
     مثال:
     پیام: "سوال دارم"
-    پاسخ: "سلام! 😊 چطور می‌تونم کمکت کنم؟ هر سوالی داری بپرس، من اینجام تا راهنماییت کنم! 🎮✨"
+    پاسخ: "سلام [نام کاربر]! 😊 چطور می‌تونم کمکت کنم؟ هر سوالی داری بپرس، من اینجام تا راهنماییت کنم! 🎮✨"
     """
     analyze_message(prompt, model='openai', callback=callback)
 
@@ -2501,14 +2520,24 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in AI_CHAT_USERS or context.user_data.get("mode") != "ai_chat":
         return ConversationHandler.END
     
+    # Get user's full name
+    user = update.effective_user
+    user_fullname = f"{user.first_name} {user.last_name if user.last_name else ''}".strip()
+    
     user_message = update.message.text
     chat_history = context.user_data.get("chat_history", [])
+    
+    # Prepare the system message with user information
+    system_message = SYSTEM_MESSAGE
+    if user_fullname:
+        system_message = f"نام و نام خانوادگی کاربر: {user_fullname}\n" + SYSTEM_MESSAGE + "\nلطفا در پاسخ‌های خود از نام کاربر استفاده کنید و اگر نام انگلیسی است به فارسی تبدیل کنید."
+    
     chat_history.append({"role": "user", "content": user_message})
     context.user_data["chat_history"] = chat_history
     
     payload = {
         "messages": [
-            {"role": "system", "content": SYSTEM_MESSAGE}
+            {"role": "system", "content": system_message}
         ] + chat_history,
         "model": "openai-large",
         "seed": 42,
@@ -2553,6 +2582,10 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     user_message = update.message.text.lower()
     replied_message = update.message.reply_to_message
 
+    # Get user's full name
+    user = update.effective_user
+    user_fullname = f"{user.first_name} {user.last_name if user.last_name else ''}".strip()
+
     group_history = context.bot_data.get("group_history", {}).get(chat_id, [])
     group_history.append({"user_id": user_id, "content": user_message, "message_id": message_id})
     context.bot_data["group_history"] = {chat_id: group_history}
@@ -2573,9 +2606,14 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     user_history.append({"role": "user", "content": user_message})
     context.user_data["group_chat_history"] = user_history
     
+    # Prepare the system message with user information
+    system_message = SYSTEM_MESSAGE
+    if user_fullname:
+        system_message = f"نام و نام خانوادگی کاربر: {user_fullname}\n" + SYSTEM_MESSAGE + "\nلطفا در پاسخ‌های خود از نام کاربر استفاده کنید و اگر نام انگلیسی است به فارسی تبدیل کنید."
+    
     payload = {
         "messages": [
-            {"role": "system", "content": SYSTEM_MESSAGE}
+            {"role": "system", "content": system_message}
         ] + user_history,
         "model": "openai-large",
         "seed": 42,

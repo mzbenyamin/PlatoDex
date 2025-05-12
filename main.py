@@ -972,11 +972,19 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
         await query.message.reply_text(clean_text("خطایی رخ داد! لطفاً دوباره امتحان کنید. 😅"))
         return ConversationHandler.END
     
-    prompt = query.data.replace("regenerate_image_", "", 1)
-    if not prompt:
-        logger.error("پرامپت خالی است!")
-        await query.message.reply_text(clean_text("پرامپت تصویر پیدا نشد! لطفاً دوباره امتحان کنید. 😅"))
-        return ConversationHandler.END
+    # استخراج پرامپت اصلی
+    # اگر پرامپت کامل در callback_data نباشد، سعی می‌کنیم از context.user_data استفاده کنیم
+    partial_prompt = query.data.replace("regenerate_image_", "", 1)
+    
+    # بررسی اگر پرامپت در context.user_data ذخیره شده است
+    original_prompt = context.user_data.get("original_prompt", "")
+    api_prompt = context.user_data.get("api_prompt", "")
+    
+    # اگر پرامپت در context نباشد، از همان مقدار جزئی callback_data استفاده می‌کنیم
+    if not original_prompt or not api_prompt:
+        logger.warning("پرامپت کامل در context.user_data پیدا نشد، از پرامپت جزئی استفاده می‌شود")
+        original_prompt = partial_prompt
+        api_prompt = partial_prompt[:1000] if len(partial_prompt) > 1000 else partial_prompt
     
     thread_id = query.message.message_thread_id if hasattr(query.message, 'is_topic_message') and query.message.is_topic_message else None
     chat_id = query.message.chat_id
@@ -987,8 +995,8 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
             await context.bot.delete_message(chat_id=chat_id, message_id=last_image_message_id)
             logger.info(f"تصویر قبلی با ID {last_image_message_id} حذف شد.")
         except Exception as e:
-            logger.error(f"خطا در حذف تصویر قبلی: {e}")
-            await query.message.reply_text(clean_text("نشد تصویر قبلی رو پاک کنم، ولی یه تصویر جدید می‌سازم! 😅"))
+            logger.warning(f"خطا در حذف تصویر قبلی: {e}")
+            # فقط یک پیام هشدار نمایش می‌دهیم، اما عملیات را ادامه می‌دهیم
     
     loading_message = await context.bot.send_message(
         chat_id=chat_id,
@@ -996,19 +1004,41 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
         message_thread_id=thread_id
     )
     
+    # ذخیره کردن آیدی پیام بارگذاری برای حذف بعدی
+    loading_message_id = loading_message.message_id
+    context.user_data["loading_message_id"] = loading_message_id
+    
     seed = random.randint(1, 1000000)
-    api_url = f"{IMAGE_API_URL}{prompt}?width=1024&height=1024&nologo=true&seed={seed}"
+    api_url = f"{IMAGE_API_URL}{api_prompt}?width=1024&height=1024&nologo=true&seed={seed}"
     try:
         response = requests.get(api_url, timeout=30)
         if response.status_code == 200:
-            await context.bot.delete_message(chat_id=chat_id, message_id=loading_message.message_id)
-            keyboard = [[InlineKeyboardButton("🔄 طراحی مجدد تصویر", callback_data=f"regenerate_image_{prompt}")]]
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
+                logger.info(f"پیام بارگذاری با ID {loading_message_id} حذف شد.")
+            except Exception as e:
+                logger.warning(f"خطا در حذف پیام بارگذاری: {e}")
+            
+            # حداکثر طول پرامپت برای نمایش در کپشن
+            display_prompt = original_prompt
+            if len(display_prompt) > 500:
+                display_prompt = display_prompt[:497] + "..."
+            
+            # تنظیم callback_data برای دکمه تولید مجدد
+            callback_data = f"regenerate_image_{api_prompt}"
+            if len(callback_data) > 64:  # محدودیت تلگرام برای callback_data
+                callback_data = f"regenerate_image_{api_prompt[:50]}"
+            
+            keyboard = [[InlineKeyboardButton("🔄 طراحی مجدد تصویر", callback_data=callback_data)]]
             reply_markup = InlineKeyboardMarkup(keyboard)
+            
             original_message_id = context.user_data.get("original_message_id", query.message.reply_to_message.message_id)
+            caption_text = clean_text(f"🪄 پرامت تصویر ایجاد شده شما:\n\n{display_prompt}\n\n@PlatoDex")
+            
             message = await context.bot.send_photo(
                 chat_id=chat_id,
                 photo=response.content,
-                caption=clean_text(f"🪄 پرامت تصویر ایجاد شده شما:\n\n{prompt}\n\n@PlatoDex"),
+                caption=caption_text,
                 reply_markup=reply_markup,
                 message_thread_id=thread_id,
                 reply_to_message_id=original_message_id
@@ -1016,20 +1046,36 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
             context.user_data["last_image_message_id"] = message.message_id
             logger.info(f"تصویر جدید با message_id {message.message_id} ارسال شد.")
         else:
-            await context.bot.delete_message(chat_id=chat_id, message_id=loading_message.message_id)
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
+            except Exception as e:
+                logger.warning(f"خطا در حذف پیام بارگذاری: {e}")
+            
+            error_message = f"مشکلی در تولید تصویر پیش آمد. کد خطا: {response.status_code}"
+            if len(api_prompt) > 500:
+                error_message += "\n\nاحتمالاً پرامپت خیلی طولانی است. لطفاً یک پرامپت کوتاه‌تر امتحان کنید."
+            
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=clean_text("مشکلی در تولید تصویر پیش آمد. لطفاً دوباره امتحان کنید."),
+                text=clean_text(error_message),
                 message_thread_id=thread_id
             )
     except Exception as e:
-        await context.bot.delete_message(chat_id=chat_id, message_id=loading_message.message_id)
+        logger.error(f"خطا در تولید تصویر مجدد گروه: {e}")
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
+        except Exception as del_e:
+            logger.warning(f"خطا در حذف پیام بارگذاری در حالت خطا: {del_e}")
+        
+        error_message = "خطایی رخ داد. لطفاً بعداً امتحان کنید."
+        if "timed out" in str(e).lower():
+            error_message = "زمان پاسخگویی API به پایان رسید. لطفاً با پرامپت کوتاه‌تر امتحان کنید."
+        
         await context.bot.send_message(
             chat_id=chat_id,
-            text=clean_text("خطایی رخ داد. لطفاً بعداً امتحان کنید."),
+            text=clean_text(error_message),
             message_thread_id=thread_id
         )
-        logger.error(f"خطا در تولید تصویر مجدد گروه: {e}")
     
     return ConversationHandler.END
 
@@ -1064,49 +1110,113 @@ async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     
+    # اینجا متن رو می‌گیریم و اگر طولانی بود کوتاهش می‌کنیم
     prompt = " ".join(context.args).strip()
+    original_prompt = prompt
+    
     if not prompt:
         await update.message.reply_text(
             clean_text("پرامپت خالیه! یه توضیح برای تصویر بده. مثلاً: /p A flying car"),
             message_thread_id=thread_id
         )
         return
+    
+    # ذخیره پرامپت اصلی برای استفاده در پیام
+    if len(prompt) > 3000:
+        shortened_prompt = prompt[:3000]
+        logger.warning(f"پرامپت بیش از حد طولانی است ({len(prompt)} کاراکتر). کوتاه شد به 3000 کاراکتر.")
+        prompt = shortened_prompt
+    
+    # برای API ما باید متن رو به یک اندازه مناسب کوتاه کنیم (حداکثر 1000 کاراکتر)
+    api_prompt = prompt
+    if len(prompt) > 1000:
+        # برای API فقط 1000 کاراکتر اول استفاده می‌شود
+        api_prompt = prompt[:1000]
+        logger.info(f"پرامپت برای API به 1000 کاراکتر کوتاه شد")
+    
     seed = random.randint(1, 999999)
     loading_message = await update.message.reply_text(
         clean_text("🖌️ در حال طراحی عکس... لطفاً صبر کنید."),
         message_thread_id=thread_id
     )
     
-    api_url = f"{IMAGE_API_URL}{prompt}?width=1024&height=1024&nologo=true&seed={seed}"
+    # ذخیره کردن آیدی پیام بارگذاری برای حذف بعدی
+    loading_message_id = loading_message.message_id
+    context.user_data["loading_message_id"] = loading_message_id
+    
+    api_url = f"{IMAGE_API_URL}{api_prompt}?width=1024&height=1024&nologo=true&seed={seed}"
     try:
         response = requests.get(api_url, timeout=30)
         if response.status_code == 200:
-            await context.bot.delete_message(chat_id=chat_id, message_id=loading_message.message_id)
-            keyboard = [[InlineKeyboardButton("🔄 طراحی مجدد تصویر", callback_data=f"regenerate_image_{prompt}")]]
+            # اول پیام بارگذاری رو پاک می‌کنیم
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
+                logger.info(f"پیام بارگذاری با ID {loading_message_id} حذف شد.")
+            except Exception as e:
+                logger.warning(f"خطا در حذف پیام بارگذاری: {e}")
+                # اگر نتونستیم پیام رو پاک کنیم، ادامه میدیم و پیام جدید می‌فرستیم
+            
+            # حداکثر طول پرامپت برای نمایش در کپشن
+            display_prompt = original_prompt
+            if len(display_prompt) > 500:
+                display_prompt = display_prompt[:497] + "..."
+            
+            # کاراکتر بازگشت برای پرامپت طولانی ایجاد می‌کنیم
+            callback_data = f"regenerate_image_{api_prompt}"
+            if len(callback_data) > 64:  # محدودیت تلگرام برای callback_data
+                # در این حالت فقط بخشی از پرامپت رو در callback_data میذاریم
+                callback_data = f"regenerate_image_{api_prompt[:50]}"
+            
+            keyboard = [[InlineKeyboardButton("🔄 طراحی مجدد تصویر", callback_data=callback_data)]]
             reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # ارسال تصویر با کپشن مناسب
+            caption_text = clean_text(f"🪄 پرامت تصویر ایجاد شده شما:\n\n{display_prompt}\n\n@PlatoDex")
+            
             message = await context.bot.send_photo(
                 chat_id=chat_id,
                 photo=response.content,
-                caption=clean_text(f"🪄 پرامت تصویر ایجاد شده شما:\n\n{prompt}\n\n@PlatoDex"),
+                caption=caption_text,
                 reply_markup=reply_markup,
                 message_thread_id=thread_id,
                 reply_to_message_id=update.message.message_id
             )
             context.user_data["last_image_message_id"] = message.message_id
             context.user_data["original_message_id"] = update.message.message_id
+            context.user_data["original_prompt"] = original_prompt
+            context.user_data["api_prompt"] = api_prompt
         else:
-            await context.bot.delete_message(chat_id=chat_id, message_id=loading_message.message_id)
+            # در صورت خطا از API
+            try:
+                await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
+            except Exception as e:
+                logger.warning(f"خطا در حذف پیام بارگذاری: {e}")
+            
+            # اعلام خطا به کاربر
+            error_message = f"مشکلی در تولید تصویر پیش آمد. کد خطا: {response.status_code}"
+            if len(prompt) > 1000:
+                error_message += "\n\nاحتمالاً پرامپت خیلی طولانی است. لطفاً یک پرامپت کوتاه‌تر امتحان کنید."
+            
             await update.message.reply_text(
-                clean_text("مشکلی در تولید تصویر پیش آمد. لطفاً دوباره امتحان کنید."),
+                clean_text(error_message),
                 message_thread_id=thread_id
             )
     except Exception as e:
-        await context.bot.delete_message(chat_id=chat_id, message_id=loading_message.message_id)
+        # خطای عمومی در پردازش درخواست
+        logger.error(f"خطا در تولید تصویر گروه: {e}")
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
+        except Exception as del_e:
+            logger.warning(f"خطا در حذف پیام بارگذاری: {del_e}")
+        
+        error_message = "خطایی رخ داد. لطفاً بعداً امتحان کنید."
+        if "timed out" in str(e).lower():
+            error_message = "زمان پاسخگویی API به پایان رسید. لطفاً با پرامپت کوتاه‌تر امتحان کنید."
+        
         await update.message.reply_text(
-            clean_text("خطایی رخ داد. لطفاً بعداً امتحان کنید."),
+            clean_text(error_message),
             message_thread_id=thread_id
         )
-        logger.error(f"خطا در تولید تصویر گروه: {e}")
 
 async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.inline_query.query

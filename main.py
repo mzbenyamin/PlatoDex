@@ -1636,7 +1636,11 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
         nav_buttons.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"next_page_{'group' if is_group else 'private'}"))
     if nav_buttons:
         keyboard.append(nav_buttons)
-    if not is_group:
+    
+    # Add back to categories button for group chats
+    if is_group:
+        keyboard.append([InlineKeyboardButton("🔙 برگشت به دسته‌بندی‌ها", callback_data="back_to_categories_group")])
+    elif not is_group:
         keyboard.append([InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2026,7 +2030,11 @@ async def send_paginated_categories(update: Update, context: ContextTypes.DEFAUL
         nav_buttons.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"next_page_{'group' if is_group else 'private'}_categories"))
     if nav_buttons:
         keyboard.append(nav_buttons)
-    if not is_group:
+    
+    # Add back to categories button for group chats
+    if is_group:
+        keyboard.append([InlineKeyboardButton("🔙 برگشت به دسته‌بندی‌ها", callback_data="back_to_categories_group")])
+    elif not is_group:
         keyboard.append([InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2235,16 +2243,35 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             img.save(gif_buffer, format='GIF', save_all=True, optimize=True)
                             gif_buffer.seek(0)
                             input_file = InputFile(gif_buffer, filename="animation.gif")
-                            await query.message.reply_animation(
+                            
+                            # Use direct send instead of reply to avoid "Message to be replied not found" error
+                            chat_id = query.message.chat_id
+                            await context.bot.send_animation(
+                                chat_id=chat_id,
                                 animation=input_file,
                                 caption=results_text,
                                 message_thread_id=thread_id
                             )
+                            
                             for i, audio_info in enumerate(item["audios"], 1):
                                 await send_audio(update, context, item, audio_info, i, None, thread_id)
+                                
+                            # Try to delete the original message to clean up chat
+                            try:
+                                await context.bot.delete_message(chat_id=chat_id, message_id=query.message.message_id)
+                            except Exception as e:
+                                logger.warning(f"Could not delete original message after WebP conversion: {e}")
                         except Exception as e:
                             logger.error(f"خطا در تبدیل WebP: {e}")
-                            await query.message.reply_text(clean_text("مشکلی توی ارسال عکس پیش اومد! 😅"), message_thread_id=thread_id)
+                            try:
+                                # Use direct send instead of reply
+                                await context.bot.send_message(
+                                    chat_id=query.message.chat_id,
+                                    text=clean_text("مشکلی توی ارسال عکس پیش اومد! 😅"),
+                                    message_thread_id=thread_id
+                                )
+                            except Exception as inner_e:
+                                logger.error(f"Error sending error message for WebP: {inner_e}")
                     asyncio.create_task(process_webp())
                 elif image_url.lower().endswith('.gif'):
                     await query.message.reply_animation(
@@ -2538,6 +2565,47 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update and update.effective_message:
         await update.effective_message.reply_text(clean_text("مشکلی پیش اومد! 😅 لطفاً دوباره امتحان کنید."))
 
+async def back_to_categories_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    # Make sure we maintain the group interaction status
+    context.user_data["is_group_interaction"] = True
+    
+    # Get the thread_id if available
+    thread_id = query.message.message_thread_id if hasattr(query.message, 'is_topic_message') and query.message.is_topic_message else None
+    context.user_data["group_thread_id"] = thread_id
+    
+    try:
+        # Try to delete the current message to keep chat clean
+        try:
+            await context.bot.delete_message(
+                chat_id=query.message.chat_id,
+                message_id=query.message.message_id
+            )
+        except Exception as e:
+            logger.warning(f"Could not delete items message in group: {e}")
+        
+        # Get categories and reset page counter
+        categories = sorted(set(item["category"] for item in EXTRACTED_ITEMS))
+        context.user_data["categories"] = categories
+        context.user_data["page"] = 0
+        
+        # Send categories list
+        await send_paginated_categories(update, context, is_group=True)
+    except Exception as e:
+        logger.error(f"Error in back_to_categories_group: {e}")
+        try:
+            await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=clean_text("مشکلی در بازگشت به دسته‌بندی‌ها پیش آمد. لطفاً دوباره امتحان کنید."),
+                message_thread_id=thread_id
+            )
+        except Exception:
+            pass
+    
+    return SELECT_CATEGORY
+
 async def main():
     global application
     max_retries = 3
@@ -2637,6 +2705,7 @@ async def main():
             application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^next_page_group"))
             application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^prev_page_private"))
             application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^next_page_private"))
+            application.add_handler(CallbackQueryHandler(back_to_categories_group, pattern="^back_to_categories_group$"))
             
             application.add_error_handler(error_handler)
 

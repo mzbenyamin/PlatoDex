@@ -1025,71 +1025,161 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
     loading_message_id = loading_message.message_id
     context.user_data["loading_message_id"] = loading_message_id
     
+    # تولید seed تصادفی
     seed = random.randint(1, 1000000)
-    api_url = f"{IMAGE_API_URL}{api_prompt}?width=1024&height=1024&nologo=true&seed={seed}"
+    
+    # سیستم retry برای مدیریت خطای 502
+    max_retries = 3
+    retry_delay = 2  # ثانیه
+    
+    for attempt in range(max_retries):
+        try:
+            # ایجاد URL با seed مختلف برای هر تلاش
+            retry_seed = seed + attempt
+            api_url = f"{IMAGE_API_URL}{api_prompt}?width=1024&height=1024&nologo=true&seed={retry_seed}"
+            
+            logger.info(f"تلاش {attempt + 1}/{max_retries} برای تولید مجدد تصویر با پرامپت: {api_prompt[:50]}...")
+            
+            async with asyncio.timeout(40):  # تایم‌اوت طولانی‌تر برای API
+                response = requests.get(api_url, timeout=40)
+            
+            if response.status_code == 200:
+                # تصویر با موفقیت تولید شد
+                logger.info(f"تصویر با موفقیت تولید شد (تلاش {attempt + 1})")
+                
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
+                    logger.info(f"پیام بارگذاری با ID {loading_message_id} حذف شد.")
+                except Exception as e:
+                    logger.warning(f"خطا در حذف پیام بارگذاری: {e}")
+                
+                # حداکثر طول پرامپت برای نمایش در کپشن
+                display_prompt = original_prompt
+                if len(display_prompt) > 500:
+                    display_prompt = display_prompt[:497] + "..."
+                
+                # تولید callback_data امن جدید
+                safe_callback_data = generate_safe_callback_data(api_prompt)
+                
+                # آپدیت کردن مپینگ callback_data
+                callback_mapping = context.user_data.get("callback_to_prompt", {})
+                callback_mapping[safe_callback_data] = api_prompt
+                context.user_data["callback_to_prompt"] = callback_mapping
+                
+                keyboard = [[InlineKeyboardButton("🔄 طراحی مجدد تصویر", callback_data=safe_callback_data)]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                original_message_id = context.user_data.get("original_message_id", query.message.reply_to_message.message_id)
+                caption_text = clean_text(f"🪄 پرامت تصویر ایجاد شده شما:\n\n{display_prompt}\n\n@PlatoDex")
+                
+                message = await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=response.content,
+                    caption=caption_text,
+                    reply_markup=reply_markup,
+                    message_thread_id=thread_id,
+                    reply_to_message_id=original_message_id
+                )
+                context.user_data["last_image_message_id"] = message.message_id
+                logger.info(f"تصویر جدید با message_id {message.message_id} ارسال شد.")
+                
+                # اگر موفق شد از حلقه خارج می‌شویم
+                break
+                
+            elif response.status_code == 502:
+                # خطای 502، سعی مجدد
+                logger.warning(f"خطای 502 از API در تلاش {attempt + 1}. در حال تلاش مجدد...")
+                
+                # به کاربر اطلاع بدهیم که در حال تلاش مجدد هستیم
+                if attempt < max_retries - 1:  # اگر این آخرین تلاش نیست
+                    try:
+                        await context.bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=loading_message_id,
+                            text=clean_text(f"🖌️ خطای سرور (502)! تلاش مجدد {attempt + 2}/{max_retries}... لطفاً صبر کنید.")
+                        )
+                    except Exception as e:
+                        logger.warning(f"خطا در به‌روزرسانی پیام بارگذاری: {e}")
+                    
+                    # صبر قبل از تلاش بعدی
+                    await asyncio.sleep(retry_delay * (attempt + 1))
+                else:
+                    # این آخرین تلاش بود و باز هم شکست خورد
+                    raise Exception("همه تلاش‌ها با خطای 502 مواجه شدند.")
+                    
+            else:
+                # خطاهای دیگر
+                error_message = f"خطای {response.status_code} از API دریافت شد."
+                logger.error(error_message)
+                raise Exception(error_message)
+                
+        except asyncio.TimeoutError:
+            logger.warning(f"تایم‌اوت در تلاش {attempt + 1} برای تولید مجدد تصویر.")
+            
+            # به کاربر اطلاع بدهیم که تایم‌اوت رخ داده
+            if attempt < max_retries - 1:
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=loading_message_id,
+                        text=clean_text(f"🖌️ تایم‌اوت! تلاش مجدد {attempt + 2}/{max_retries}... لطفاً صبر کنید.")
+                    )
+                except Exception as e:
+                    logger.warning(f"خطا در به‌روزرسانی پیام بارگذاری: {e}")
+                
+                await asyncio.sleep(retry_delay * (attempt + 1))
+            else:
+                # این آخرین تلاش بود و باز هم شکست خورد
+                raise Exception("همه تلاش‌ها با تایم‌اوت مواجه شدند.")
+                
+        except Exception as e:
+            # اگر این آخرین تلاش نیست، دوباره تلاش می‌کنیم
+            if attempt < max_retries - 1:
+                logger.warning(f"خطا در تلاش {attempt + 1}: {e}. در حال تلاش مجدد...")
+                
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=loading_message_id,
+                        text=clean_text(f"🖌️ خطا رخ داد! تلاش مجدد {attempt + 2}/{max_retries}... لطفاً صبر کنید.")
+                    )
+                except Exception as edit_error:
+                    logger.warning(f"خطا در به‌روزرسانی پیام بارگذاری: {edit_error}")
+                
+                await asyncio.sleep(retry_delay * (attempt + 1))
+            else:
+                # اگر این آخرین تلاش بود، خطا را نمایش می‌دهیم
+                logger.error(f"همه تلاش‌ها برای تولید مجدد تصویر با خطا مواجه شدند: {e}")
+                raise
+    else:
+        # اگر از حلقه خارج شدیم بدون اینکه تصویر را با موفقیت ارسال کنیم
+        # این حالت زمانی رخ می‌دهد که همه تلاش‌ها شکست بخورند اما exception هم پرتاب نشود
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
+        except Exception as e:
+            logger.warning(f"خطا در حذف پیام بارگذاری پس از شکست همه تلاش‌ها: {e}")
+            
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=clean_text("متأسفانه همه تلاش‌ها برای تولید تصویر با شکست مواجه شدند. لطفاً بعداً دوباره امتحان کنید."),
+            message_thread_id=thread_id
+        )
+            
+    # مدیریت خطا برای کل تابع
     try:
-        response = requests.get(api_url, timeout=30)
-        if response.status_code == 200:
-            try:
-                await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
-                logger.info(f"پیام بارگذاری با ID {loading_message_id} حذف شد.")
-            except Exception as e:
-                logger.warning(f"خطا در حذف پیام بارگذاری: {e}")
-            
-            # حداکثر طول پرامپت برای نمایش در کپشن
-            display_prompt = original_prompt
-            if len(display_prompt) > 500:
-                display_prompt = display_prompt[:497] + "..."
-            
-            # تولید callback_data امن جدید
-            safe_callback_data = generate_safe_callback_data(api_prompt)
-            
-            # آپدیت کردن مپینگ callback_data
-            callback_mapping = context.user_data.get("callback_to_prompt", {})
-            callback_mapping[safe_callback_data] = api_prompt
-            context.user_data["callback_to_prompt"] = callback_mapping
-            
-            keyboard = [[InlineKeyboardButton("🔄 طراحی مجدد تصویر", callback_data=safe_callback_data)]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            original_message_id = context.user_data.get("original_message_id", query.message.reply_to_message.message_id)
-            caption_text = clean_text(f"🪄 پرامت تصویر ایجاد شده شما:\n\n{display_prompt}\n\n@PlatoDex")
-            
-            message = await context.bot.send_photo(
-                chat_id=chat_id,
-                photo=response.content,
-                caption=caption_text,
-                reply_markup=reply_markup,
-                message_thread_id=thread_id,
-                reply_to_message_id=original_message_id
-            )
-            context.user_data["last_image_message_id"] = message.message_id
-            logger.info(f"تصویر جدید با message_id {message.message_id} ارسال شد.")
-        else:
-            try:
-                await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
-            except Exception as e:
-                logger.warning(f"خطا در حذف پیام بارگذاری: {e}")
-            
-            error_message = f"مشکلی در تولید تصویر پیش آمد. کد خطا: {response.status_code}"
-            if len(api_prompt) > 500:
-                error_message += "\n\nاحتمالاً پرامپت خیلی طولانی است. لطفاً یک پرامپت کوتاه‌تر امتحان کنید."
-            
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=clean_text(error_message),
-                message_thread_id=thread_id
-            )
+        pass  # اینجا کاری انجام نمی‌دهیم، فقط برای مدیریت خطاهای احتمالی است
     except Exception as e:
-        logger.error(f"خطا در تولید تصویر مجدد گروه: {e}")
+        logger.error(f"خطای نهایی در تولید مجدد تصویر گروه: {e}")
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
         except Exception as del_e:
             logger.warning(f"خطا در حذف پیام بارگذاری در حالت خطا: {del_e}")
         
         error_message = "خطایی رخ داد. لطفاً بعداً امتحان کنید."
-        if "timed out" in str(e).lower():
-            error_message = "زمان پاسخگویی API به پایان رسید. لطفاً با پرامپت کوتاه‌تر امتحان کنید."
+        if "502" in str(e):
+            error_message = "خطای سرور (502). پلتفرم تولید تصویر در حال حاضر در دسترس نیست، لطفاً بعداً امتحان کنید."
+        elif "timed out" in str(e).lower() or "timeout" in str(e).lower():
+            error_message = "زمان پاسخگویی API به پایان رسید. لطفاً با پرامپت کوتاه‌تر امتحان کنید یا بعداً تلاش کنید."
         
         await context.bot.send_message(
             chat_id=chat_id,
@@ -1154,7 +1244,6 @@ async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
         api_prompt = prompt[:1000]
         logger.info(f"پرامپت برای API به 1000 کاراکتر کوتاه شد")
     
-    seed = random.randint(1, 999999)
     loading_message = await update.message.reply_text(
         clean_text("🖌️ در حال طراحی عکس... لطفاً صبر کنید."),
         message_thread_id=thread_id
@@ -1164,76 +1253,165 @@ async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     loading_message_id = loading_message.message_id
     context.user_data["loading_message_id"] = loading_message_id
     
-    api_url = f"{IMAGE_API_URL}{api_prompt}?width=1024&height=1024&nologo=true&seed={seed}"
+    # تولید seed تصادفی
+    seed = random.randint(1, 999999)
+    
+    # سیستم retry برای مدیریت خطای 502
+    max_retries = 3
+    retry_delay = 2  # ثانیه
+    
+    for attempt in range(max_retries):
+        try:
+            # ایجاد URL با seed مختلف برای هر تلاش
+            retry_seed = seed + attempt
+            api_url = f"{IMAGE_API_URL}{api_prompt}?width=1024&height=1024&nologo=true&seed={retry_seed}"
+            
+            logger.info(f"تلاش {attempt + 1}/{max_retries} برای تولید تصویر با پرامپت: {api_prompt[:50]}...")
+            
+            async with asyncio.timeout(40):  # تایم‌اوت طولانی‌تر برای API
+                response = requests.get(api_url, timeout=40)
+            
+            if response.status_code == 200:
+                # تصویر با موفقیت تولید شد
+                logger.info(f"تصویر با موفقیت تولید شد (تلاش {attempt + 1})")
+                
+                # اول پیام بارگذاری رو پاک می‌کنیم
+                try:
+                    await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
+                    logger.info(f"پیام بارگذاری با ID {loading_message_id} حذف شد.")
+                except Exception as e:
+                    logger.warning(f"خطا در حذف پیام بارگذاری: {e}")
+                
+                # حداکثر طول پرامپت برای نمایش در کپشن
+                display_prompt = original_prompt
+                if len(display_prompt) > 500:
+                    display_prompt = display_prompt[:497] + "..."
+                
+                # تولید callback_data امن
+                safe_callback_data = generate_safe_callback_data(api_prompt)
+                
+                # ذخیره پرامپت‌ها برای استفاده در تولید مجدد
+                callback_mapping = context.user_data.get("callback_to_prompt", {})
+                callback_mapping[safe_callback_data] = api_prompt
+                context.user_data["callback_to_prompt"] = callback_mapping
+                context.user_data["original_prompt"] = original_prompt
+                context.user_data["api_prompt"] = api_prompt
+                
+                keyboard = [[InlineKeyboardButton("🔄 طراحی مجدد تصویر", callback_data=safe_callback_data)]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                # ارسال تصویر با کپشن مناسب
+                caption_text = clean_text(f"🪄 پرامت تصویر ایجاد شده شما:\n\n{display_prompt}\n\n@PlatoDex")
+                
+                message = await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=response.content,
+                    caption=caption_text,
+                    reply_markup=reply_markup,
+                    message_thread_id=thread_id,
+                    reply_to_message_id=update.message.message_id
+                )
+                context.user_data["last_image_message_id"] = message.message_id
+                context.user_data["original_message_id"] = update.message.message_id
+                
+                # اگر موفق شد از حلقه خارج می‌شویم
+                break
+                
+            elif response.status_code == 502:
+                # خطای 502، سعی مجدد
+                logger.warning(f"خطای 502 از API در تلاش {attempt + 1}. در حال تلاش مجدد...")
+                
+                # به کاربر اطلاع بدهیم که در حال تلاش مجدد هستیم
+                if attempt < max_retries - 1:  # اگر این آخرین تلاش نیست
+                    try:
+                        await context.bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=loading_message_id,
+                            text=clean_text(f"🖌️ خطای سرور (502)! تلاش مجدد {attempt + 2}/{max_retries}... لطفاً صبر کنید.")
+                        )
+                    except Exception as e:
+                        logger.warning(f"خطا در به‌روزرسانی پیام بارگذاری: {e}")
+                    
+                    # صبر قبل از تلاش بعدی
+                    await asyncio.sleep(retry_delay * (attempt + 1))
+                else:
+                    # این آخرین تلاش بود و باز هم شکست خورد
+                    raise Exception("همه تلاش‌ها با خطای 502 مواجه شدند.")
+                    
+            else:
+                # خطاهای دیگر
+                error_message = f"خطای {response.status_code} از API دریافت شد."
+                logger.error(error_message)
+                raise Exception(error_message)
+                
+        except asyncio.TimeoutError:
+            logger.warning(f"تایم‌اوت در تلاش {attempt + 1} برای تولید تصویر.")
+            
+            # به کاربر اطلاع بدهیم که تایم‌اوت رخ داده
+            if attempt < max_retries - 1:
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=loading_message_id,
+                        text=clean_text(f"🖌️ تایم‌اوت! تلاش مجدد {attempt + 2}/{max_retries}... لطفاً صبر کنید.")
+                    )
+                except Exception as e:
+                    logger.warning(f"خطا در به‌روزرسانی پیام بارگذاری: {e}")
+                
+                await asyncio.sleep(retry_delay * (attempt + 1))
+            else:
+                # این آخرین تلاش بود و باز هم شکست خورد
+                raise Exception("همه تلاش‌ها با تایم‌اوت مواجه شدند.")
+                
+        except Exception as e:
+            # اگر این آخرین تلاش نیست، دوباره تلاش می‌کنیم
+            if attempt < max_retries - 1:
+                logger.warning(f"خطا در تلاش {attempt + 1}: {e}. در حال تلاش مجدد...")
+                
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=chat_id,
+                        message_id=loading_message_id,
+                        text=clean_text(f"🖌️ خطا رخ داد! تلاش مجدد {attempt + 2}/{max_retries}... لطفاً صبر کنید.")
+                    )
+                except Exception as edit_error:
+                    logger.warning(f"خطا در به‌روزرسانی پیام بارگذاری: {edit_error}")
+                
+                await asyncio.sleep(retry_delay * (attempt + 1))
+            else:
+                # اگر این آخرین تلاش بود، خطا را نمایش می‌دهیم
+                logger.error(f"همه تلاش‌ها برای تولید تصویر با خطا مواجه شدند: {e}")
+                raise
+    else:
+        # اگر از حلقه خارج شدیم بدون اینکه تصویر را با موفقیت ارسال کنیم
+        # این حالت زمانی رخ می‌دهد که همه تلاش‌ها شکست بخورند اما exception هم پرتاب نشود
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
+        except Exception as e:
+            logger.warning(f"خطا در حذف پیام بارگذاری پس از شکست همه تلاش‌ها: {e}")
+            
+        await update.message.reply_text(
+            clean_text("متأسفانه همه تلاش‌ها برای تولید تصویر با شکست مواجه شدند. لطفاً بعداً دوباره امتحان کنید."),
+            message_thread_id=thread_id
+        )
+            
+    # مدیریت خطا برای کل تابع
+    # این بخش فقط در صورتی اجرا می‌شود که exception از حلقه for بالا رها شود
     try:
-        response = requests.get(api_url, timeout=30)
-        if response.status_code == 200:
-            # اول پیام بارگذاری رو پاک می‌کنیم
-            try:
-                await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
-                logger.info(f"پیام بارگذاری با ID {loading_message_id} حذف شد.")
-            except Exception as e:
-                logger.warning(f"خطا در حذف پیام بارگذاری: {e}")
-                # اگر نتونستیم پیام رو پاک کنیم، ادامه میدیم و پیام جدید می‌فرستیم
-            
-            # حداکثر طول پرامپت برای نمایش در کپشن
-            display_prompt = original_prompt
-            if len(display_prompt) > 500:
-                display_prompt = display_prompt[:497] + "..."
-            
-            # تولید callback_data امن
-            safe_callback_data = generate_safe_callback_data(api_prompt)
-            
-            # ذخیره پرامپت‌ها برای استفاده در تولید مجدد
-            callback_mapping = context.user_data.get("callback_to_prompt", {})
-            callback_mapping[safe_callback_data] = api_prompt
-            context.user_data["callback_to_prompt"] = callback_mapping
-            context.user_data["original_prompt"] = original_prompt
-            context.user_data["api_prompt"] = api_prompt
-            
-            keyboard = [[InlineKeyboardButton("🔄 طراحی مجدد تصویر", callback_data=safe_callback_data)]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            
-            # ارسال تصویر با کپشن مناسب
-            caption_text = clean_text(f"🪄 پرامت تصویر ایجاد شده شما:\n\n{display_prompt}\n\n@PlatoDex")
-            
-            message = await context.bot.send_photo(
-                chat_id=chat_id,
-                photo=response.content,
-                caption=caption_text,
-                reply_markup=reply_markup,
-                message_thread_id=thread_id,
-                reply_to_message_id=update.message.message_id
-            )
-            context.user_data["last_image_message_id"] = message.message_id
-            context.user_data["original_message_id"] = update.message.message_id
-        else:
-            # در صورت خطا از API
-            try:
-                await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
-            except Exception as e:
-                logger.warning(f"خطا در حذف پیام بارگذاری: {e}")
-            
-            # اعلام خطا به کاربر
-            error_message = f"مشکلی در تولید تصویر پیش آمد. کد خطا: {response.status_code}"
-            if len(prompt) > 1000:
-                error_message += "\n\nاحتمالاً پرامپت خیلی طولانی است. لطفاً یک پرامپت کوتاه‌تر امتحان کنید."
-            
-            await update.message.reply_text(
-                clean_text(error_message),
-                message_thread_id=thread_id
-            )
+        pass  # اینجا کاری انجام نمی‌دهیم، فقط برای مدیریت خطاهای احتمالی است
     except Exception as e:
         # خطای عمومی در پردازش درخواست
-        logger.error(f"خطا در تولید تصویر گروه: {e}")
+        logger.error(f"خطای نهایی در تولید تصویر گروه: {e}")
         try:
             await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
         except Exception as del_e:
             logger.warning(f"خطا در حذف پیام بارگذاری: {del_e}")
         
         error_message = "خطایی رخ داد. لطفاً بعداً امتحان کنید."
-        if "timed out" in str(e).lower():
-            error_message = "زمان پاسخگویی API به پایان رسید. لطفاً با پرامپت کوتاه‌تر امتحان کنید."
+        if "502" in str(e):
+            error_message = "خطای سرور (502). پلتفرم تولید تصویر در حال حاضر در دسترس نیست، لطفاً بعداً امتحان کنید."
+        elif "timed out" in str(e).lower() or "timeout" in str(e).lower():
+            error_message = "زمان پاسخگویی API به پایان رسید. لطفاً با پرامپت کوتاه‌تر امتحان کنید یا بعداً تلاش کنید."
         
         await update.message.reply_text(
             clean_text(error_message),

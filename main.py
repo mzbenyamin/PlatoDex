@@ -14,6 +14,7 @@ import io
 import tempfile
 import os
 import random
+import uuid  # برای تولید شناسه‌های منحصر به فرد
 from typing import List, Dict, Optional, Union
 import uvicorn
 import sqlite3
@@ -38,6 +39,16 @@ SELECT_SIZE, GET_PROMPT = range(2, 4)
 DEFAULT_CHAT_ID = 789912945
 PROCESSED_MESSAGES = set()
 PROCESSING_LOCK = asyncio.Lock()  # تغییر به asyncio.Lock
+
+# این تابع جدید را اضافه کنید که callback_data امن ایجاد می‌کند
+def generate_safe_callback_data(prompt):
+    """
+    ایجاد یک callback_data امن برای استفاده در دکمه‌های اینلاین
+    به جای استفاده از خود پرامپت، یک شناسه منحصر به فرد تولید می‌کند
+    """
+    # تولید یک ID منحصر به فرد کوتاه
+    callback_id = str(uuid.uuid4())[:8]
+    return f"regenerate_image_{callback_id}"
 
 SYSTEM_MESSAGE = (
     "شما دستیار هوشمند PlatoDex هستید و درمورد پلاتو به کاربران کمک میکنید و به صورت خودمونی جذاب و با ایموجی "
@@ -972,19 +983,25 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
         await query.message.reply_text(clean_text("خطایی رخ داد! لطفاً دوباره امتحان کنید. 😅"))
         return ConversationHandler.END
     
-    # استخراج پرامپت اصلی
-    # اگر پرامپت کامل در callback_data نباشد، سعی می‌کنیم از context.user_data استفاده کنیم
-    partial_prompt = query.data.replace("regenerate_image_", "", 1)
+    # استخراج پرامپت از callback_data یا از context.user_data
+    callback_id = query.data
     
-    # بررسی اگر پرامپت در context.user_data ذخیره شده است
+    # بررسی اگر mapping برای این callback_id در context.user_data وجود دارد
+    callback_mapping = context.user_data.get("callback_to_prompt", {})
+    api_prompt = callback_mapping.get(callback_id, "")
+    
+    # اگر پرامپت در callback_mapping نباشد، سعی می‌کنیم از context.user_data استفاده کنیم
+    if not api_prompt:
+        logger.warning(f"پرامپت برای {callback_id} در callback_mapping پیدا نشد، از api_prompt استفاده می‌شود")
+        api_prompt = context.user_data.get("api_prompt", "")
+    
     original_prompt = context.user_data.get("original_prompt", "")
-    api_prompt = context.user_data.get("api_prompt", "")
     
-    # اگر پرامپت در context نباشد، از همان مقدار جزئی callback_data استفاده می‌کنیم
-    if not original_prompt or not api_prompt:
-        logger.warning("پرامپت کامل در context.user_data پیدا نشد، از پرامپت جزئی استفاده می‌شود")
-        original_prompt = partial_prompt
-        api_prompt = partial_prompt[:1000] if len(partial_prompt) > 1000 else partial_prompt
+    # اگر هنوز پرامپتی پیدا نشد، خطا نمایش می‌دهیم
+    if not api_prompt:
+        logger.error("پرامپت برای بازتولید تصویر پیدا نشد!")
+        await query.message.reply_text(clean_text("متأسفانه نمی‌توانم پرامپت را پیدا کنم. لطفاً دوباره تلاش کنید."))
+        return ConversationHandler.END
     
     thread_id = query.message.message_thread_id if hasattr(query.message, 'is_topic_message') and query.message.is_topic_message else None
     chat_id = query.message.chat_id
@@ -1024,12 +1041,15 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
             if len(display_prompt) > 500:
                 display_prompt = display_prompt[:497] + "..."
             
-            # تنظیم callback_data برای دکمه تولید مجدد
-            callback_data = f"regenerate_image_{api_prompt}"
-            if len(callback_data) > 64:  # محدودیت تلگرام برای callback_data
-                callback_data = f"regenerate_image_{api_prompt[:50]}"
+            # تولید callback_data امن جدید
+            safe_callback_data = generate_safe_callback_data(api_prompt)
             
-            keyboard = [[InlineKeyboardButton("🔄 طراحی مجدد تصویر", callback_data=callback_data)]]
+            # آپدیت کردن مپینگ callback_data
+            callback_mapping = context.user_data.get("callback_to_prompt", {})
+            callback_mapping[safe_callback_data] = api_prompt
+            context.user_data["callback_to_prompt"] = callback_mapping
+            
+            keyboard = [[InlineKeyboardButton("🔄 طراحی مجدد تصویر", callback_data=safe_callback_data)]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             original_message_id = context.user_data.get("original_message_id", query.message.reply_to_message.message_id)
@@ -1161,13 +1181,17 @@ async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if len(display_prompt) > 500:
                 display_prompt = display_prompt[:497] + "..."
             
-            # کاراکتر بازگشت برای پرامپت طولانی ایجاد می‌کنیم
-            callback_data = f"regenerate_image_{api_prompt}"
-            if len(callback_data) > 64:  # محدودیت تلگرام برای callback_data
-                # در این حالت فقط بخشی از پرامپت رو در callback_data میذاریم
-                callback_data = f"regenerate_image_{api_prompt[:50]}"
+            # تولید callback_data امن
+            safe_callback_data = generate_safe_callback_data(api_prompt)
             
-            keyboard = [[InlineKeyboardButton("🔄 طراحی مجدد تصویر", callback_data=callback_data)]]
+            # ذخیره پرامپت‌ها برای استفاده در تولید مجدد
+            callback_mapping = context.user_data.get("callback_to_prompt", {})
+            callback_mapping[safe_callback_data] = api_prompt
+            context.user_data["callback_to_prompt"] = callback_mapping
+            context.user_data["original_prompt"] = original_prompt
+            context.user_data["api_prompt"] = api_prompt
+            
+            keyboard = [[InlineKeyboardButton("🔄 طراحی مجدد تصویر", callback_data=safe_callback_data)]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             # ارسال تصویر با کپشن مناسب
@@ -1183,8 +1207,6 @@ async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             context.user_data["last_image_message_id"] = message.message_id
             context.user_data["original_message_id"] = update.message.message_id
-            context.user_data["original_prompt"] = original_prompt
-            context.user_data["api_prompt"] = api_prompt
         else:
             # در صورت خطا از API
             try:

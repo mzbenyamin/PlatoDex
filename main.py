@@ -1,5 +1,5 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent, InputFile, error, ChatPermissions
-from telegram.ext import Application, CommandHandler, ContextTypes, InlineQueryHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler, ChosenInlineResultHandler
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent, InputFile, error
+from telegram.ext import Application, CommandHandler, ContextTypes, InlineQueryHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler
 import requests
 from bs4 import BeautifulSoup
 import json
@@ -20,15 +20,10 @@ import uvicorn
 import sqlite3
 import queue
 import threading
-from datetime import datetime, timedelta
 
 # تنظیم لاگ
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# ایجاد برنامه FastAPI
-app = FastAPI()
-application = None
 
 # توکن و آدرس‌ها
 TOKEN = '7764880184:AAEAp5oyNfB__Cotdmtxb9BHnWgwydRN0ME'
@@ -36,14 +31,14 @@ IMAGE_API_URL = 'https://pollinations.ai/prompt/'
 TEXT_API_URL = 'https://text.pollinations.ai/'
 URL = "https://platopedia.com/items"
 BASE_IMAGE_URL = "https://profile.platocdn.com/"
-WEBHOOK_URL = 'https://platodex.onrender.com'
+WEBHOOK_URL = "https://platodex.onrender.com/webhook"
 EXTRACTED_ITEMS = []
 AI_CHAT_USERS = set()
 SEARCH_ITEM, SELECT_CATEGORY = range(2)
 SELECT_SIZE, GET_PROMPT = range(2, 4)
 DEFAULT_CHAT_ID = 789912945
 PROCESSED_MESSAGES = set()
-PROCESSING_LOCK = asyncio.Lock()
+PROCESSING_LOCK = asyncio.Lock()  # تغییر به asyncio.Lock
 
 # این تابع جدید را اضافه کنید که callback_data امن ایجاد می‌کند
 def generate_safe_callback_data(prompt):
@@ -136,163 +131,155 @@ SYSTEM_MESSAGE = (
 ADMIN_ID = 7403352779  # Admin user ID
 
 def init_db():
-    """مقداردهی اولیه دیتابیس"""
-    try:
-        conn = sqlite3.connect('bot.db')
-        c = conn.cursor()
-        
-        # ایجاد جدول تنظیمات
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )
-        ''')
-        
-        # ایجاد جدول تخلفات
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS violations (
-                user_id TEXT PRIMARY KEY,
-                count INTEGER DEFAULT 0
-            )
-        ''')
-        
-        # ایجاد جدول لاگ تخلفات
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS violation_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id TEXT,
-                username TEXT,
-                message TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # ایجاد جدول تاریخچه چت
-        c.execute('''
-            CREATE TABLE IF NOT EXISTS chat_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                chat_id INTEGER,
-                user_id INTEGER,
-                username TEXT,
-                message TEXT,
-                reply_to_message_id INTEGER,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        
-        # ایجاد ایندکس‌ها
-        c.execute('CREATE INDEX IF NOT EXISTS idx_chat_history_chat_id ON chat_history(chat_id)')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_chat_history_user_id ON chat_history(user_id)')
-        c.execute('CREATE INDEX IF NOT EXISTS idx_chat_history_timestamp ON chat_history(timestamp)')
-        
-        conn.commit()
-        conn.close()
-        logger.info("Database initialized successfully")
-    except Exception as e:
-        logger.error(f"Error initializing database: {e}")
+    conn = sqlite3.connect('violations.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS violations (
+            user_id TEXT,
+            username TEXT,
+            message TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS chat_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id TEXT,
+            user_id TEXT,
+            username TEXT,
+            message TEXT,
+            reply_to_message_id TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('response_triggers', ''))
+    cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('no_response_triggers', ''))
+    cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('violation_triggers', ''))
+    cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('no_violation_triggers', ''))
+    conn.commit()
+    conn.close()
+    logger.info("Database initialized")
 
-def get_setting(context: ContextTypes.DEFAULT_TYPE, key: str, default=''):
-    """دریافت تنظیمات از حافظه"""
-    return context.bot_data.get('settings', {}).get(key, default)
+def get_setting(key, default=''):
+    conn = sqlite3.connect('violations.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT value FROM settings WHERE key = ?', (key,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else default
 
-def update_setting(context: ContextTypes.DEFAULT_TYPE, key: str, value: str):
-    """به‌روزرسانی تنظیمات در حافظه"""
-    if 'settings' not in context.bot_data:
-        context.bot_data['settings'] = {}
-    context.bot_data['settings'][key] = value
+def update_setting(key, value):
+    conn = sqlite3.connect('violations.db')
+    cursor = conn.cursor()
+    cursor.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, value))
+    conn.commit()
+    conn.close()
     logger.info(f"Setting updated: {key} = {value}")
 
-def count_violations(context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    """شمارش تخلفات کاربر"""
-    violations = context.bot_data.get('violations', {})
-    return violations.get(str(user_id), 0)
+def count_violations(user_id):
+    conn = sqlite3.connect('violations.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM violations WHERE user_id = ?', (user_id,))
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
 
-def log_violation(context: ContextTypes.DEFAULT_TYPE, user_id: int, username: str, message: str):
-    """ثبت تخلف در حافظه"""
-    if 'violation_logs' not in context.bot_data:
-        context.bot_data['violation_logs'] = []
-    
-    log_entry = {
-        'user_id': user_id,
-        'username': username,
-        'message': message,
-        'timestamp': datetime.now().isoformat()
-    }
-    context.bot_data['violation_logs'].append(log_entry)
-    
-    # به‌روزرسانی تعداد تخلفات
-    if 'violations' not in context.bot_data:
-        context.bot_data['violations'] = {}
-    context.bot_data['violations'][str(user_id)] = context.bot_data['violations'].get(str(user_id), 0) + 1
-    
+def log_violation(user_id, username, message):
+    conn = sqlite3.connect('violations.db')
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO violations (user_id, username, message) VALUES (?, ?, ?)',
+                   (user_id, username, message))
+    conn.commit()
+    conn.close()
     logger.info(f"Violation logged for user {user_id} ({username}): {message}")
 
-def clear_violations(context: ContextTypes.DEFAULT_TYPE, user_id: int):
-    """پاک کردن تخلفات کاربر"""
-    if 'violations' in context.bot_data:
-        context.bot_data['violations'][str(user_id)] = 0
+def clear_violations(user_id):
+    conn = sqlite3.connect('violations.db')
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM violations WHERE user_id = ?', (user_id,))
+    conn.commit()
+    conn.close()
     logger.info(f"Violations cleared for user {user_id}")
 
-def add_to_chat_history(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, username: str, message: str, reply_to_message_id: Optional[int] = None):
-    """افزودن پیام به تاریخچه چت"""
-    if 'chat_history' not in context.bot_data:
-        context.bot_data['chat_history'] = []
-    
-    # محدود کردن تعداد پیام‌ها به 1000
-    if len(context.bot_data['chat_history']) >= 1000:
-        context.bot_data['chat_history'] = context.bot_data['chat_history'][-999:]
-    
-    chat_entry = {
-        'chat_id': chat_id,
-        'user_id': user_id,
-        'username': username,
-        'message': message,
-        'reply_to_message_id': reply_to_message_id,
-        'timestamp': datetime.now().isoformat()
-    }
-    context.bot_data['chat_history'].append(chat_entry)
+def add_to_chat_history(chat_id, user_id, username, message, reply_to_message_id=None):
+    conn = sqlite3.connect('violations.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM chat_history')
+    count = cursor.fetchone()[0]
+    if count >= 1000:
+        cursor.execute('DELETE FROM chat_history WHERE id = (SELECT MIN(id) FROM chat_history)')
+    cursor.execute('''
+        INSERT INTO chat_history (chat_id, user_id, username, message, reply_to_message_id)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (chat_id, user_id, username, message, reply_to_message_id))
+    conn.commit()
+    conn.close()
     logger.info(f"Message added to chat history for user {user_id} (@{username})")
 
-def get_recent_chat_history(context: ContextTypes.DEFAULT_TYPE, chat_id: int, limit: int = 10):
-    """دریافت تاریخچه اخیر چت"""
-    if 'chat_history' not in context.bot_data:
-        return []
-    
-    chat_history = [msg for msg in context.bot_data['chat_history'] if msg['chat_id'] == chat_id]
-    return chat_history[-limit:]
+def get_recent_chat_history(chat_id, limit=10):
+    conn = sqlite3.connect('violations.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT user_id, username, message, reply_to_message_id, timestamp
+        FROM chat_history
+        WHERE chat_id = ?
+        ORDER BY timestamp DESC
+        LIMIT ?
+    ''', (chat_id, limit))
+    history = cursor.fetchall()
+    conn.close()
+    return history
 
 # --- صف API ---
 api_queue = queue.Queue()
-def process_api_queue(context: ContextTypes.DEFAULT_TYPE = None):
+def process_api_queue():
     while True:
         try:
             text, model, callback = api_queue.get()
-            if not text:
-                continue
-            
-            # Process the text with the specified model
-            try:
-                # Add your API call logic here
-                # For now, we'll just echo the text
-                response = text
-                callback(response)
-            except Exception as e:
-                logger.error(f"Error processing text: {e}")
+            logger.info(f"Processing API request: {text[:50]}...")
+            url = f"https://text.pollinations.ai/{text}&model={model}"
+            for attempt in range(3):
+                try:
+                    response = requests.get(url)
+                    response.raise_for_status()
+                    logger.info(f"API response: {response.text[:50]}...")
+                    callback(response.text.strip())
+                    time.sleep(2)
+                    break
+                except requests.HTTPError as e:
+                    if e.response.status_code == 429:
+                        logger.warning(f"Rate limit hit, retrying after {2 * (attempt + 1)} seconds...")
+                        time.sleep(2 * (attempt + 1))
+                        continue
+                    else:
+                        logger.error(f"HTTP Error: {e}")
+                        callback(None)
+                        break
+                except requests.RequestException as e:
+                    logger.error(f"Request Error: {e}")
+                    callback(None)
+                    break
+            else:
+                logger.error("Failed after retries.")
                 callback(None)
-            
             api_queue.task_done()
         except Exception as e:
             logger.error(f"Error in API queue: {e}")
-
-def analyze_message(context: ContextTypes.DEFAULT_TYPE, text, model='openai', callback=lambda x: None):
+threading.Thread(target=process_api_queue, daemon=True).start()
+def analyze_message(text, model='openai', callback=lambda x: None):
     api_queue.put((text, model, callback))
 
-def should_respond_or_violate(context: ContextTypes.DEFAULT_TYPE, text, bot_username, user_id, username, callback):
-    response_triggers = get_setting(context, 'response_triggers', '')
-    no_response_triggers = get_setting(context, 'no_response_triggers', '')
-    violation_triggers = get_setting(context, 'violation_triggers', '')
-    no_violation_triggers = get_setting(context, 'no_violation_triggers', '')
+def should_respond_or_violate(text, bot_username, user_id, username, callback):
+    response_triggers = get_setting('response_triggers', '')
+    no_response_triggers = get_setting('no_response_triggers', '')
+    violation_triggers = get_setting('violation_triggers', '')
+    no_violation_triggers = get_setting('no_violation_triggers', '')
     logger.info(f"Analyzing message from {user_id} (@{username}): {text}")
     prompt = f"""
     شما یک دستیار هوشمند در گروه‌های تلگرامی هستید که به مدیریت گروه کمک می‌کنید و به سوالات کاربران پاسخ می‌دهید.
@@ -309,36 +296,72 @@ def should_respond_or_violate(context: ContextTypes.DEFAULT_TYPE, text, bot_user
     - 'تخلف': اگر پیام تخلف است
     - 'هیچی': اگر هیچ کدام از موارد بالا صدق نمی‌کند
     """
-    analyze_message(context, prompt, callback=callback)
+    analyze_message(prompt, model='openai', callback=callback)
 
-def generate_response(context: ContextTypes.DEFAULT_TYPE, text, user_id, username, callback, chat_history=None):
-    logger.info(f"Generating response for message from {user_id} (@{username}): {text}")
+def generate_response(text, user_id, username, callback, chat_history=None):
+    response_triggers = get_setting('response_triggers', '')
+    
+    # Get user's full name if available
+    user_fullname = None
+    if chat_history and len(chat_history) > 0:
+        for msg in chat_history:
+            if str(msg[0]) == str(user_id):
+                user_fullname = msg[1]  # Username is stored in index 1
+                break
+    
+    logger.info(f"Generating response for {user_id} (@{username}): {text}")
+    
+    history_context = ""
+    if chat_history:
+        history_context = "\nتاریخچه چت اخیر:\n"
+        for msg in chat_history:
+            history_context += f"@{msg[1]}: {msg[2]}\n"
+    
+    # Create a personalized prompt with user's information
+    user_info = f"نام و نام کاربری کاربر: @{username}" if not user_fullname else f"نام و نام کاربری کاربر: {user_fullname} (@{username})"
+    
     prompt = f"""
-    شما یک دستیار هوشمند در گروه‌های تلگرامی هستید که به مدیریت گروه کمک می‌کنید و به سوالات کاربران پاسخ می‌دهید.
-    به پیام زیر پاسخ دهید:
-    متن پیام: {text}
-    تاریخچه چت اخیر:
-    {chat_history if chat_history else 'بدون تاریخچه'}
-    پاسخ شما باید:
-    1. کوتاه و مفید باشد
-    2. به زبان فارسی باشد
-    3. از اموجی‌های مناسب استفاده کند
-    4. اگر سوال کاربر مشخص نیست، از او توضیح بیشتری بخواهید
+    شما دستیار هوشمند PlatoDex هستید و درمورد پلاتو به کاربران کمک میکنید و به صورت خودمونی جذاب و با ایموجی حرف میزنی به صورت نسل Z و کمی با طنز حرف بزن و شوخی کنه. به مشخصات آیتم‌های پلاتو دسترسی داری و می‌تونی به سوالات کاربر در مورد آیتم‌ها جواب بدی و راهنمایی کنی چطور با دستور /i مشخصات کامل رو بگیرن.
+    
+    {user_info}
+    متن و یا سوال و جواب کاربر: {text}
+    تاریخچه پیام کاربران :{history_context}
+    
+    به عنوان یک دستیار حرفه‌ای و دوستانه:
+    - لطفا در پاسخ از نام کاربر استفاده کن و اگر نام انگلیسی است به فارسی تبدیل کن
+    - پاسخ باید کوتاه، دقیق و جذاب باشد
+    - از ایموجی‌های مناسب استفاده کن
+    - با لحن نسل Z و دوستانه صحبت کن
+    - اگر سوال مرتبط با کلمات کلیدی ({response_triggers}) باشد، پاسخ مرتبط بده
+    - اگر نیاز است، هشدار دهید که برای اطلاعات دقیق‌تر با متخصص مشورت کنند
+    - اگر سوالی است که نیاز به اجازه کاربر دارد، از او اجازه بگیرید
+    - اگر سوال در مورد آیتم‌های پلاتو است، راهنمایی کن که از دستور /i استفاده کنند
+    - اگر سوال در مورد چند اکانت است، توضیح بده که از تاریخ 28 فروردین 1404 پلاتو سرورهای قدیمی غیرفعال شده‌اند
+    - اگر سوال در مورد دوستان است، توضیح بده که دیگر نمی‌توان دوستان کاربران دیگر را دید
+    - اگر سوال در مورد سلاطین پلاتو است، توضیح بده که اولین رسانه فارسی‌زبون پلاتو از 1400 با مدیریت بنیامین است
+    
+    مثال:
+    پیام: "سوال دارم"
+    پاسخ: "سلام [نام کاربر]! 😊 چطور می‌تونم کمکت کنم؟ هر سوالی داری بپرس، من اینجام تا راهنماییت کنم! 🎮✨"
     """
-    analyze_message(context, prompt, callback=callback)
+    analyze_message(prompt, model='openai', callback=callback)
 
-def generate_violation_reason(context: ContextTypes.DEFAULT_TYPE, text, callback):
-    logger.info(f"Generating violation reason for message: {text}")
+def generate_violation_reason(text, callback):
     prompt = f"""
     شما یک دستیار هوشمند در گروه‌های تلگرامی هستید که به مدیریت گروه کمک می‌کنید.
-    پیام زیر را تحلیل کنید و دلیل تخلف را مشخص کنید:
+    پیام زیر را تحلیل کنید و دلیل دقیق تخلف را توضیح دهید:
+    - دلیل باید واضح و حرفه‌ای باشد
+    - حداکثر 50 کلمه باشد
+    - از کلمات توهین‌آمیز استفاده نکنید
+    - دلیل باید به صورت مستقیم و بدون ابهام باشد
     متن پیام: {text}
-    پاسخ شما باید:
-    1. دلیل تخلف را به صورت واضح توضیح دهد
-    2. به زبان فارسی باشد
-    3. کوتاه و مختصر باشد
+    مثال:
+    پیام: "سلام به همه"
+    دلیل: پیام خالی یا بی‌محتوا
+    پیام: "لینک دانلود فیلم"
+    دلیل: ارسال لینک غیرمجاز و تبلیغات
     """
-    analyze_message(context, prompt, callback=callback)
+    analyze_message(prompt, model='openai', callback=callback)
 
 # --- دستورات ادمین و هندلرهای مدیریتی ---
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove
@@ -433,174 +456,143 @@ async def clear_violations_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # --- هندلر پیام متنی هوشمند ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
-        return
-    
     message_text = update.message.text
+    bot_username = context.bot.username
+    chat_id = update.message.chat_id
     user_id = update.message.from_user.id
     username = update.message.from_user.username or "Unknown"
-    
-    # افزودن پیام به تاریخچه چت
-    add_to_chat_history(context, update.message.chat_id, user_id, username, message_text, update.message.message_id)
-    
-    # بررسی تخلف
-    if message_text.lower() in ['spam', 'ad', 'link']:
-        log_violation(context, str(user_id), username, message_text)
-        violation_count = count_violations(context, str(user_id))
-        
-        if violation_count >= 3:
-            await update.message.reply_text(
-                f"کاربر {username} به دلیل تخلفات مکرر از گروه اخراج شد."
-            )
-            await context.bot.ban_chat_member(
-                chat_id=update.message.chat_id,
-                user_id=user_id
-            )
-        else:
-            await update.message.reply_text(
-                f"کاربر {username} به دلیل تخلف اخطار دریافت کرد.\n"
-                f"تعداد تخلفات: {violation_count}/3"
-            )
-    
-    # بررسی نیاز به پاسخ
-    async def callback(decision):
-        if decision == 'پاسخ بده':
-            chat_history = get_recent_chat_history(context, update.message.chat_id)
-            generate_response(context, message_text, user_id, username, callback, chat_history)
-        elif decision == 'اجازه بگیر':
-            await update.message.reply_text(
-                f"سلام {username}! 👋\n"
-                f"می‌خواهید به سوال شما پاسخ دهم؟"
-            )
-        elif decision == 'تخلف':
-            log_violation(context, str(user_id), username, message_text)
-            violation_count = count_violations(context, str(user_id))
-            await update.message.reply_text(
-                f"کاربر {username} به دلیل تخلف اخطار دریافت کرد.\n"
-                f"تعداد تخلفات: {violation_count}/3"
-            )
-    
-    should_respond_or_violate(context, message_text, context.bot.username, user_id, username, callback)
+    message_id = update.message.message_id
+    add_to_chat_history(chat_id, user_id, username, message_text, message_id)
+    chat_history = get_recent_chat_history(chat_id)
+    # اگر پیام به ربات مربوط بود یا در چت خصوصی بود
+    if f"@{bot_username}" in message_text or update.message.chat.type == 'private':
+        def callback(reply):
+            if reply and context.job_queue:
+                context.job_queue.run_once(
+                    lambda ctx: ctx.bot.send_message(
+                        chat_id=chat_id,
+                        text=reply,
+                        parse_mode='HTML',
+                        reply_to_message_id=message_id
+                    ),
+                    0
+                )
+        generate_response(message_text, user_id, username, callback, chat_history)
+    else:
+        def callback(decision):
+            if not decision:
+                return
+            decision = decision.lower()
+            if 'پاسخ بده' in decision:
+                def reply_callback(reply):
+                    if reply and context.job_queue:
+                        context.job_queue.run_once(
+                            lambda ctx: ctx.bot.send_message(
+                                chat_id=chat_id,
+                                text=reply,
+                                parse_mode='HTML',
+                                reply_to_message_id=message_id
+                            ),
+                            0
+                        )
+                generate_response(message_text, user_id, username, reply_callback, chat_history)
+            elif 'اجازه بگیر' in decision:
+                keyboard = [[InlineKeyboardButton("بله", callback_data=f"allow_{user_id}"),
+                           InlineKeyboardButton("خیر", callback_data=f"deny_{user_id}")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                context.job_queue.run_once(
+                    lambda ctx: ctx.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"کاربر {update.message.from_user.mention_html()}، آیا می‌خواهید به سوال شما پاسخ دهم؟",
+                        parse_mode='HTML',
+                        reply_to_message_id=message_id,
+                        reply_markup=reply_markup
+                    ),
+                    0
+                )
+            elif 'تخلف' in decision:
+                log_violation(str(user_id), username, message_text)
+                violation_count = count_violations(str(user_id))
+                def violation_reason_callback(reason):
+                    if not reason:
+                        reason = "محتوای غیرمجاز یا تخلف از قوانین"
+                    context.job_queue.run_once(
+                        lambda ctx: ctx.bot.send_message(
+                            chat_id=chat_id,
+                            text=f"⚠️ <b>اخطار</b>\n\n"
+                                 f"{update.message.from_user.mention_html()} شما یک اخطار دریافت کردید\n\n"
+                                 f"📇 <b>علت:</b> {reason}\n\n"
+                                 f"❗️<b>تعداد اخطارهای شما:</b> {violation_count}",
+                            parse_mode='HTML',
+                            reply_to_message_id=message_id
+                        ),
+                        0
+                    )
+                generate_violation_reason(message_text, violation_reason_callback)
+        should_respond_or_violate(message_text, bot_username, user_id, username, callback)
 
 # --- هندلر CallbackQuery برای اجازه پاسخ ---
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
-    if query.data == 'yes':
-        message_text = query.message.text
-        user_id = query.from_user.id
-        username = query.from_user.username or "Unknown"
-        
-        async def reply_callback(reply):
-            if reply:
-                await query.message.reply_text(reply)
-        
-        chat_history = get_recent_chat_history(context, query.message.chat_id)
-        generate_response(context, message_text, user_id, username, reply_callback, chat_history)
-
+    if query.data.startswith('allow_'):
+        user_id = query.data.split('_')[1]
+        message = query.message.reply_to_message
+        if message:
+            def reply_callback(reply):
+                if reply and context.job_queue:
+                    context.job_queue.run_once(
+                        lambda ctx: ctx.bot.send_message(
+                            chat_id=query.message.chat_id,
+                            text=reply,
+                            parse_mode='HTML',
+                            reply_to_message_id=message.message_id
+                        ),
+                        0
+                    )
+            generate_response(message.text, user_id, message.from_user.username or "Unknown", reply_callback)
+    await query.message.delete()
 # --- فراخوانی init_db و افزودن هندلرها در main ---
 async def main():
-    global application
-    
-    # ایجاد برنامه
+    init_db()
     application = Application.builder().token(TOKEN).build()
     
-    # مقداردهی اولیه دیتابیس
-    init_db()
-    
-    # راه‌اندازی صف API
-    threading.Thread(target=process_api_queue, args=(application,), daemon=True).start()
-    
-    # تنظیم webhook
-    webhook_url = f"{WEBHOOK_URL}/webhook"
-    await application.bot.set_webhook(url=webhook_url)
-    
-    # بررسی وضعیت webhook
-    webhook_status = await check_webhook_status(application)
-    if not webhook_status:
-        logger.error("Failed to set up webhook")
-        return
-    
-    # اضافه کردن هندلرها
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", start))
-    application.add_handler(CommandHandler("cancel", cancel))
-    application.add_handler(CommandHandler("back", back_to_home))
-    application.add_handler(CommandHandler("admin", admin_start))
+    # Add handlers
     application.add_handler(CommandHandler("warn", warn))
-    application.add_handler(CommandHandler("violations", violations))
-    application.add_handler(CommandHandler("clear_violations", clear_violations_cmd))
-    application.add_handler(CommandHandler("add_admin", add_admin))
-    application.add_handler(CommandHandler("remove_admin", remove_admin))
-    application.add_handler(CommandHandler("list_admins", list_admins))
-    
-    # هندلر پیام‌ها
+    application.add_handler(CommandHandler("violations", violations)) 
+    application.add_handler(CommandHandler("clearviolations", clear_violations_cmd))
+    application.add_handler(CommandHandler("admin", admin_start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    # هندلر callback query
-    application.add_handler(CallbackQueryHandler(handle_callback_query))
-    
-    # هندلر خطا
-    application.add_error_handler(error_handler)
-    
-    # راه‌اندازی سرور
-    config = uvicorn.Config(
-        app,
-        host="0.0.0.0",
-        port=8000,
-        log_level="info",
-        access_log=True,
-        timeout_keep_alive=30
-    )
-    server = uvicorn.Server(config)
-    await server.serve()
+    application.add_handler(CallbackQueryHandler(handle_callback_query, pattern="^(allow_|deny_).*$"))
+
+    return application
+
+application = None
+
+app = FastAPI()
 
 @app.post("/webhook")
 async def webhook(request: Request):
     global application
-    if not application:
-        return {"status": "error", "message": "Application not initialized"}
-    try:
-        update = await request.json()
-        update_obj = Update.de_json(update, application.bot)
-        update_id = update_obj.update_id
-        logger.info(f"دریافت درخواست با update_id: {update_id}")
-        async with PROCESSING_LOCK:
-            if update_id in PROCESSED_MESSAGES:
-                logger.warning(f"درخواست تکراری با update_id: {update_id} - نادیده گرفته شد")
-                return {"status": "ok"}
-            PROCESSED_MESSAGES.add(update_id)
-        await application.process_update(update_obj)
-        return {"status": "ok"}
-    except Exception as e:
-        logger.error(f"Error processing webhook: {e}")
-        return {"status": "error", "message": str(e)}
+    update = await request.json()
+    update_obj = Update.de_json(update, application.bot)
+    update_id = update_obj.update_id
+    logger.info(f"دریافت درخواست با update_id: {update_id}")
+    async with PROCESSING_LOCK:
+        if update_id in PROCESSED_MESSAGES:
+            logger.warning(f"درخواست تکراری با update_id: {update_id} - نادیده گرفته شد")
+            return {"status": "ok"}
+        PROCESSED_MESSAGES.add(update_id)
+    asyncio.create_task(application.process_update(update_obj))
+    return {"status": "ok"}
 
 @app.get("/")
 async def root():
-    global application
-    if not application:
-        return {"status": "error", "message": "Application not initialized"}
-    try:
-        webhook_info = await application.bot.get_webhook_info()
-        return {
-            "status": "running",
-            "webhook": {
-                "url": webhook_info.url,
-                "has_custom_certificate": webhook_info.has_custom_certificate,
-                "pending_update_count": webhook_info.pending_update_count,
-                "last_error_date": webhook_info.last_error_date.isoformat() if webhook_info.last_error_date else None,
-                "last_error_message": webhook_info.last_error_message
-            }
-        }
-    except Exception as e:
-        logger.error(f"Error getting webhook info: {e}")
-        return {"status": "error", "message": str(e)}
+    return {"message": "PlatoDex Bot is running!"}
 
 @app.head("/webhook")
 async def webhook_head():
-    return {"status": "ok"}
+    return {"status": "online"}
 
 def clean_text(text):
     if not text:
@@ -2589,106 +2581,13 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
-    user_message = update.message.text
-    username = update.message.from_user.username or "Unknown"
+    user_message = update.message.text.lower()
     replied_message = update.message.reply_to_message
 
-    # تحلیل پیام برای مدیریت گروه
-    def group_analysis_callback(analysis_result):
-        if not analysis_result:
-            return
-        
-        try:
-            analysis = json.loads(analysis_result)
-            
-            # بررسی تخلفات
-            if analysis.get("violation"):
-                violation_type = analysis.get("violation_type", "")
-                if violation_type == "link":
-                    context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-                    update.message.reply_text(
-                        f"⚠️ پیام حاوی لینک حذف شد.\nکاربر: {update.message.from_user.mention_html()}",
-                        parse_mode='HTML',
-                        message_thread_id=thread_id
-                    )
-                elif violation_type == "spam":
-                    context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-                    update.message.reply_text(
-                        f"⚠️ پیام اسپم حذف شد.\nکاربر: {update.message.from_user.mention_html()}",
-                        parse_mode='HTML',
-                        message_thread_id=thread_id
-                    )
-            
-            # گزارش به ادمین‌ها
-            if analysis.get("needs_admin_report"):
-                admin_message = f"🚨 گزارش مدیریتی:\nکاربر: {update.message.from_user.mention_html()}\nدلیل: {analysis.get('report_reason')}"
-                # ارسال به ادمین‌ها
-                for admin_id in context.bot_data.get("admins", []):
-                    try:
-                        context.bot.send_message(chat_id=admin_id, text=admin_message, parse_mode='HTML')
-                    except Exception as e:
-                        logger.error(f"خطا در ارسال گزارش به ادمین {admin_id}: {e}")
-            
-            # اعمال سکوت
-            if analysis.get("needs_mute"):
-                duration = analysis.get("mute_duration", "1h")
-                try:
-                    context.bot.restrict_chat_member(
-                        chat_id=chat_id,
-                        user_id=user_id,
-                        permissions=ChatPermissions(can_send_messages=False),
-                        until_date=datetime.now() + timedelta(hours=1)
-                    )
-                    update.message.reply_text(
-                        f"🔇 کاربر {update.message.from_user.mention_html()} به مدت {duration} سکوت شد.",
-                        parse_mode='HTML',
-                        message_thread_id=thread_id
-                    )
-                except Exception as e:
-                    logger.error(f"خطا در اعمال سکوت: {e}")
-            
-            # ثبت یادآوری
-            if analysis.get("is_reminder"):
-                reminder_details = analysis.get("reminder_details", "")
-                # ذخیره یادآوری در دیتابیس یا حافظه
-                context.bot_data.setdefault("reminders", []).append({
-                    "chat_id": chat_id,
-                    "user_id": user_id,
-                    "details": reminder_details,
-                    "created_at": datetime.now().isoformat()
-                })
-                update.message.reply_text(
-                    f"⏰ یادآوری ثبت شد:\n{reminder_details}",
-                    message_thread_id=thread_id
-                )
-            
-            # اعطای لقب
-            if analysis.get("deserves_reward"):
-                suggested_title = analysis.get("suggested_title", "")
-                reward_reason = analysis.get("reward_reason", "")
-                try:
-                    context.bot.set_chat_administrator_custom_title(
-                        chat_id=chat_id,
-                        user_id=user_id,
-                        custom_title=suggested_title
-                    )
-                    update.message.reply_text(
-                        f"🏆 به {update.message.from_user.mention_html()} لقب «{suggested_title}» اعطا شد!\nدلیل: {reward_reason}",
-                        parse_mode='HTML',
-                        message_thread_id=thread_id
-                    )
-                except Exception as e:
-                    logger.error(f"خطا در اعطای لقب: {e}")
-        
-        except json.JSONDecodeError as e:
-            logger.error(f"خطا در پردازش پاسخ تحلیل: {e}")
-        except Exception as e:
-            logger.error(f"خطا در پردازش تحلیل گروه: {e}")
+    # Get user's full name
+    user = update.effective_user
+    user_fullname = f"{user.first_name} {user.last_name if user.last_name else ''}".strip()
 
-    # تحلیل پیام
-    analyze_group_message(user_message, user_id, username, chat_id, group_analysis_callback)
-
-    # ادامه پردازش عادی پیام
     group_history = context.bot_data.get("group_history", {}).get(chat_id, [])
     group_history.append({"user_id": user_id, "content": user_message, "message_id": message_id})
     context.bot_data["group_history"] = {chat_id: group_history}
@@ -2696,10 +2595,7 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     user_history = context.user_data.get("group_chat_history", [])
     
     should_reply = (
-        "ربات" in user_message.lower() or 
-        "پلاتو" in user_message.lower() or 
-        "سلام" in user_message.lower() or 
-        "خداحافظ" in user_message.lower() or
+        "ربات" in user_message or "پلاتو" in user_message or "سلام" in user_message or "خداحافظ" in user_message or
         (replied_message and replied_message.from_user.id == context.bot.id)
     )
     
@@ -2711,10 +2607,6 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     
     user_history.append({"role": "user", "content": user_message})
     context.user_data["group_chat_history"] = user_history
-    
-    # Get user's full name
-    user = update.effective_user
-    user_fullname = f"{user.first_name} {user.last_name if user.last_name else ''}".strip()
     
     # Prepare the system message with user information
     system_message = SYSTEM_MESSAGE
@@ -2736,39 +2628,16 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
             ai_response = clean_text(response.text.strip())
             user_history.append({"role": "assistant", "content": ai_response})
             context.user_data["group_chat_history"] = user_history
-            
-            final_response = ai_response
-            for item in EXTRACTED_ITEMS:
-                if item["name"].lower() in user_message.lower():
-                    price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-                    price_info = clean_text(f"{item['price']['value']} {price_type}")
-                    item_info = clean_text(
-                        f"مشخصات آیتم پیدا شد! 🎉\n"
-                        f"🔖 نام: {item['name']}\n"
-                        f"💸 قیمت: {price_info}\n"
-                        f"اگه می‌خوای مشخصات کامل‌تر با صدا رو ببینی، کافیه بگی: /i {item['name']} 😎"
-                    )
-                    final_response += f"\n\n{item_info}"
-                    break
-            
-            await update.message.reply_text(
-                final_response,
-                reply_to_message_id=update.message.message_id,
-                message_thread_id=thread_id
-            )
+            await update.message.reply_text(ai_response, message_thread_id=thread_id)
         else:
-            error_message = clean_text("اوفف، یه مشکلی پیش اومد! 😅 بعداً امتحان کن 🚀")
             await update.message.reply_text(
-                error_message,
-                reply_to_message_id=update.message.message_id,
+                clean_text("مشکلی پیش اومد! 😅 بعداً دوباره امتحان کن 🚀"),
                 message_thread_id=thread_id
             )
     except Exception as e:
         logger.error(f"خطا در اتصال به API چت گروه: {e}")
-        error_message = clean_text("اییی، یه خطا خوردم! 😭 بعداً دوباره بیا 🚀")
         await update.message.reply_text(
-            error_message,
-            reply_to_message_id=update.message.message_id,
+            clean_text("خطایی رخ داد! 😭 بعداً دوباره امتحان کن 🚀"),
             message_thread_id=thread_id
         )
 
@@ -2845,135 +2714,124 @@ async def back_to_categories_group(update: Update, context: ContextTypes.DEFAULT
     
     return SELECT_CATEGORY
 
-async def check_webhook_status(application: Application):
-    try:
-        webhook_info = await application.bot.get_webhook_info()
-        logger.info(f"Webhook status: {webhook_info}")
-        logger.info(f"Webhook URL: {webhook_info.url}")
-        
-        if webhook_info.last_error_message:
-            logger.error(f"Webhook error: {webhook_info.last_error_message}")
-            return False
-        
-        if webhook_info.pending_update_count > 0:
-            logger.warning(f"Pending updates: {webhook_info.pending_update_count}")
-        
-        return True
-    except Exception as e:
-        logger.error(f"Error checking webhook status: {e}")
-        return False
-
-def analyze_group_message(text, user_id, username, chat_id, callback):
-    prompt = f"""
-    شما یک دستیار هوشمند برای مدیریت گروه‌های تلگرامی هستید. وظیفه شما تحلیل پیام‌ها و ارائه راهنمایی‌های مدیریتی است.
+async def main():
+    global application
+    max_retries = 3
+    retry_delay = 5
     
-    پیام زیر را تحلیل کنید و موارد زیر را بررسی کنید:
-    1. آیا پیام حاوی لینک یا کلمات ممنوعه است؟
-    2. آیا پیام شامل زمان‌بندی یا یادآوری رویداد است؟
-    3. آیا پیام نیاز به گزارش به ادمین‌ها دارد؟
-    4. آیا کاربر نیاز به محدودیت (مثل سکوت موقت) دارد؟
-    5. آیا کاربر مستحق تشویق یا لقب خاصی است؟
-    
-    متن پیام: {text}
-    شناسه کاربر: {user_id}
-    نام کاربری: {username}
-    شناسه گروه: {chat_id}
-    
-    پاسخ شما باید به صورت JSON باشد با ساختار زیر:
-    {{
-        "violation": true/false,
-        "violation_type": "link/spam/inappropriate",
-        "needs_admin_report": true/false,
-        "report_reason": "دلیل گزارش",
-        "needs_mute": true/false,
-        "mute_duration": "مدت زمان سکوت",
-        "is_reminder": true/false,
-        "reminder_details": "جزئیات یادآوری",
-        "deserves_reward": true/false,
-        "suggested_title": "لقب پیشنهادی",
-        "reward_reason": "دلیل تشویق"
-    }}
-    """
-    analyze_message(prompt, model='openai', callback=callback)
-
-async def check_reminders(context: ContextTypes.DEFAULT_TYPE):
-    """بررسی و ارسال یادآوری‌های ثبت شده"""
-    current_time = datetime.now()
-    reminders = context.bot_data.get("reminders", [])
-    remaining_reminders = []
-    
-    for reminder in reminders:
+    for attempt in range(max_retries):
         try:
-            created_at = datetime.fromisoformat(reminder["created_at"])
-            # اگر 24 ساعت گذشته باشد، یادآوری را ارسال کن
-            if (current_time - created_at).total_seconds() >= 86400:  # 24 ساعت
-                chat_id = reminder["chat_id"]
-                user_id = reminder["user_id"]
-                details = reminder["details"]
-                
-                # ارسال یادآوری
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=f"⏰ یادآوری:\n{details}\n\nکاربر: {user_id}"
-                )
-            else:
-                remaining_reminders.append(reminder)
+            application = Application.builder().token(TOKEN).read_timeout(60).write_timeout(60).connect_timeout(60).build()
+            
+            await application.initialize()
+            logger.info("Application با موفقیت مقداردهی شد.")
+            
+            if application.job_queue is None:
+                logger.error("JobQueue فعال نیست!")
+                raise RuntimeError("JobQueue فعال نیست!")
+            
+            await application.bot.set_webhook(url=WEBHOOK_URL)
+            logger.info(f"Webhook روی {WEBHOOK_URL} تنظیم شد.")
+            
+            schedule_scraping(application)
+            await extract_items()
+            
+            search_conv_handler = ConversationHandler(
+                entry_points=[CallbackQueryHandler(start_item_search, pattern="^search_items$")],
+                states={
+                    SELECT_CATEGORY: [
+                        CallbackQueryHandler(search_by_name, pattern="^search_by_name$"),
+                        CallbackQueryHandler(select_category, pattern="^select_category_"),
+                        CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_private_categories$")
+                    ],
+                    SEARCH_ITEM: [
+                        MessageHandler(filters.TEXT & ~filters.COMMAND, process_item_search),
+                        CallbackQueryHandler(select_item, pattern="^select_item_"),
+                        CallbackQueryHandler(back_to_items, pattern="^back_to_items$"),
+                        CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_private$")
+                    ]
+                },
+                fallbacks=[
+                    CommandHandler("cancel", cancel),
+                    CommandHandler("start", start),
+                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
+                ],
+                name="item_search",
+                persistent=False
+            )
+
+            image_conv_handler = ConversationHandler(
+                entry_points=[
+                    CallbackQueryHandler(start_generate_image, pattern="^generate_image$"),
+                    CallbackQueryHandler(retry_generate_image, pattern="^retry_generate_image$")
+                ],
+                states={
+                    SELECT_SIZE: [CallbackQueryHandler(select_size, pattern="^size_")],
+                    GET_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_prompt)]
+                },
+                fallbacks=[
+                    CommandHandler("cancel", cancel),
+                    CommandHandler("start", start),
+                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
+                ],
+                name="image_generation",
+                persistent=False
+            )
+
+            group_image_conv_handler = ConversationHandler(
+                entry_points=[
+                    CommandHandler("p", start_group_image, filters=filters.ChatType.GROUPS),
+                    CallbackQueryHandler(regenerate_group_image, pattern="^regenerate_image_")
+                ],
+                states={},
+                fallbacks=[
+                    CommandHandler("cancel", cancel),
+                    CommandHandler("start", start)
+                ],
+                name="group_image_generation",
+                persistent=False
+            )
+
+            application.add_handler(CommandHandler("start", start))
+            application.add_handler(CommandHandler("cancel", cancel))
+            application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
+            application.add_handler(search_conv_handler)
+            application.add_handler(image_conv_handler)
+            application.add_handler(group_image_conv_handler)
+            application.add_handler(InlineQueryHandler(inline_query))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r'^@PlatoDex\s+\w+'), handle_inline_selection))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
+            application.add_handler(CommandHandler("item", process_item_in_group, filters=filters.ChatType.GROUPS))
+            application.add_handler(CommandHandler("i", process_item_in_group, filters=filters.ChatType.GROUPS))
+            application.add_handler(CommandHandler("w", show_leaderboard, filters=filters.ChatType.GROUPS))
+            application.add_handler(CallbackQueryHandler(select_group_item, pattern="^select_group_item_"))
+            
+            # Add these handlers for group interactions
+            application.add_handler(CallbackQueryHandler(select_category, pattern="^select_category_"))
+            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^prev_page_group"))
+            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^next_page_group"))
+            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^prev_page_private"))
+            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^next_page_private"))
+            application.add_handler(CallbackQueryHandler(back_to_categories_group, pattern="^back_to_categories_group$"))
+            
+            application.add_error_handler(error_handler)
+
+            port = int(os.getenv("PORT", 8000))
+            config = uvicorn.Config(app, host="0.0.0.0", port=port)
+            server = uvicorn.Server(config)
+            await server.serve()
+
+            return
+
         except Exception as e:
-            logger.error(f"خطا در پردازش یادآوری: {e}")
-    
-    # به‌روزرسانی لیست یادآوری‌ها
-    context.bot_data["reminders"] = remaining_reminders
+            logger.error(f"خطا در تلاش {attempt + 1}/{max_retries}: {e}")
+            if attempt < max_retries - 1:
+                logger.info(f"تلاش دوباره بعد از {retry_delay} ثانیه...")
+                await asyncio.sleep(retry_delay)
+            else:
+                logger.error("همه تلاش‌ها برای شروع ربات ناموفق بود!")
+                raise
 
-async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """اضافه کردن ادمین جدید"""
-    if not context.args:
-        await update.message.reply_text("لطفاً شناسه کاربری ادمین را وارد کنید.")
-        return
-    try:
-        admin_id = int(context.args[0])
-        admins = context.bot_data.get("admins", [])
-        if admin_id not in admins:
-            admins.append(admin_id)
-            context.bot_data["admins"] = admins
-            await update.message.reply_text(f"ادمین با شناسه {admin_id} با موفقیت اضافه شد.")
-        else:
-            await update.message.reply_text("این کاربر قبلاً به عنوان ادمین ثبت شده است.")
-    except ValueError:
-        await update.message.reply_text("شناسه کاربری باید عدد باشد.")
-
-async def remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """حذف ادمین"""
-    if not context.args:
-        await update.message.reply_text("لطفاً شناسه کاربری ادمین را وارد کنید.")
-        return
-    
-    try:
-        admin_id = int(context.args[0])
-        admins = context.bot_data.get("admins", [])
-        if admin_id in admins:
-            admins.remove(admin_id)
-            context.bot_data["admins"] = admins
-            await update.message.reply_text(f"ادمین با شناسه {admin_id} با موفقیت حذف شد.")
-        else:
-            await update.message.reply_text("این کاربر در لیست ادمین‌ها وجود ندارد.")
-    except ValueError:
-        await update.message.reply_text("شناسه کاربری باید عدد باشد.")
-
-async def list_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """نمایش لیست ادمین‌ها"""
-    admins = context.bot_data.get("admins", [])
-    if not admins:
-        await update.message.reply_text("هیچ ادمینی ثبت نشده است.")
-        return
-    
-    admin_list = "\n".join([f"- {admin_id}" for admin_id in admins])
-    await update.message.reply_text(f"لیست ادمین‌ها:\n{admin_list}")
-
-if __name__ == '__main__':
-    try:
-        import asyncio
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("برنامه با موفقیت متوقف شد.")
-    except Exception as e:
-        print(f"خطا در اجرای برنامه: {e}")
+if __name__ == "__main__":
+    asyncio.run(main())

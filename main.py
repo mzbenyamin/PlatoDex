@@ -27,12 +27,12 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # توکن و آدرس‌ها
-TOKEN = os.getenv('TELEGRAM_TOKEN', '7764880184:AAEAp5oyNfB__Cotdmtxb9BHnWgwydRN0ME')
+TOKEN = '7764880184:AAEAp5oyNfB__Cotdmtxb9BHnWgwydRN0ME'
 IMAGE_API_URL = 'https://pollinations.ai/prompt/'
 TEXT_API_URL = 'https://text.pollinations.ai/'
 URL = "https://platopedia.com/items"
 BASE_IMAGE_URL = "https://profile.platocdn.com/"
-WEBHOOK_URL = os.getenv('WEBHOOK_URL', 'https://platodex.onrender.com')
+WEBHOOK_URL = 'https://platodex.onrender.com'
 EXTRACTED_ITEMS = []
 AI_CHAT_USERS = set()
 SEARCH_ITEM, SELECT_CATEGORY = range(2)
@@ -2856,8 +2856,9 @@ async def main():
         return {"status": "ok"}
     
     # راه‌اندازی سرور
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000)
+    server = uvicorn.Server(config)
+    await server.serve()
 
 def analyze_group_message(text, user_id, username, chat_id, callback):
     prompt = f"""
@@ -2965,10 +2966,9 @@ async def list_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
     admin_list = "\n".join([f"- {admin_id}" for admin_id in admins])
     await update.message.reply_text(f"لیست ادمین‌ها:\n{admin_list}")
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     try:
+        import asyncio
         asyncio.run(main())
-    except KeyboardInterrupt:
-        print("برنامه با موفقیت متوقف شد.")
     except Exception as e:
         print(f"خطا در اجرای برنامه: {e}")

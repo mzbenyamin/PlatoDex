@@ -2923,10 +2923,32 @@ async def main():
     await application.initialize()
     await application.start()
     
-    try:
-        await application.run_polling(allowed_updates=Update.ALL_TYPES)
-    finally:
-        await application.stop()
+    # تنظیم webhook
+    webhook_url = os.getenv('WEBHOOK_URL', 'https://platodex.onrender.com/webhook')
+    await application.bot.set_webhook(url=webhook_url)
+    
+    # راه‌اندازی FastAPI
+    app = FastAPI()
+    
+    @app.post("/webhook")
+    async def webhook(request: Request):
+        update = await request.json()
+        await application.process_update(Update.de_json(update, application.bot))
+        return {"status": "ok"}
+    
+    @app.get("/")
+    async def root():
+        return {"status": "ok", "message": "Bot is running"}
+    
+    @app.head("/webhook")
+    async def webhook_head():
+        return {"status": "ok"}
+    
+    # راه‌اندازی سرور
+    port = int(os.getenv("PORT", 8000))
+    config = uvicorn.Config(app, host="0.0.0.0", port=port)
+    server = uvicorn.Server(config)
+    await server.serve()
 
 def analyze_group_message(text, user_id, username, chat_id, callback):
     prompt = f"""

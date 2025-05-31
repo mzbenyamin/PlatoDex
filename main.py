@@ -27,12 +27,12 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 logger = logging.getLogger(__name__)
 
 # توکن و آدرس‌ها
-TOKEN = '7764880184:AAEAp5oyNfB__Cotdmtxb9BHnWgwydRN0ME'
+TOKEN = os.getenv('TELEGRAM_TOKEN', '7764880184:AAEAp5oyNfB__Cotdmtxb9BHnWgwydRN0ME')
 IMAGE_API_URL = 'https://pollinations.ai/prompt/'
 TEXT_API_URL = 'https://text.pollinations.ai/'
 URL = "https://platopedia.com/items"
 BASE_IMAGE_URL = "https://profile.platocdn.com/"
-WEBHOOK_URL = "https://platodex.onrender.com/webhook"
+WEBHOOK_URL = os.getenv('WEBHOOK_URL', 'https://platodex.onrender.com')
 EXTRACTED_ITEMS = []
 AI_CHAT_USERS = set()
 SEARCH_ITEM, SELECT_CATEGORY = range(2)
@@ -2766,32 +2766,46 @@ async def back_to_categories_group(update: Update, context: ContextTypes.DEFAULT
     return SELECT_CATEGORY
 
 async def check_webhook_status(application: Application):
-    """بررسی وضعیت webhook"""
     try:
-        if application and application.bot:
-            webhook_info = await application.bot.get_webhook_info()
-            logger.info(f"Webhook status: {webhook_info}")
-            return webhook_info
-        else:
-            logger.error("Application or bot is not available")
-            return None
+        webhook_info = await application.bot.get_webhook_info()
+        logger.info(f"Webhook status: {webhook_info}")
+        logger.info(f"Webhook URL: {webhook_info.url}")
+        
+        if webhook_info.last_error_message:
+            logger.error(f"Webhook error: {webhook_info.last_error_message}")
+            return False
+        
+        if webhook_info.pending_update_count > 0:
+            logger.warning(f"Pending updates: {webhook_info.pending_update_count}")
+        
+        return True
     except Exception as e:
-        logger.error(f"خطا در بررسی وضعیت webhook: {e}")
-        return None
+        logger.error(f"Error checking webhook status: {e}")
+        return False
 
 async def main():
+    global application
+    
     # ایجاد برنامه
     application = Application.builder().token(TOKEN).build()
     
-    # مقداردهی اولیه داده‌ها
-    application.bot_data['settings'] = {}
-    application.bot_data['violations'] = {}
-    application.bot_data['violation_logs'] = []
-    application.bot_data['chat_history'] = []
-    application.bot_data['admins'] = []
+    # راه‌اندازی صف API
+    threading.Thread(target=process_api_queue, args=(application,), daemon=True).start()
+    
+    # تنظیم webhook
+    await application.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
+    
+    # بررسی وضعیت webhook
+    webhook_status = await check_webhook_status(application)
+    if not webhook_status:
+        logger.error("Failed to set up webhook")
+        return
     
     # اضافه کردن هندلرها
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", start))
+    application.add_handler(CommandHandler("cancel", cancel))
+    application.add_handler(CommandHandler("back", back_to_home))
     application.add_handler(CommandHandler("admin", admin_start))
     application.add_handler(CommandHandler("warn", warn))
     application.add_handler(CommandHandler("violations", violations))
@@ -2799,71 +2813,51 @@ async def main():
     application.add_handler(CommandHandler("add_admin", add_admin))
     application.add_handler(CommandHandler("remove_admin", remove_admin))
     application.add_handler(CommandHandler("list_admins", list_admins))
-    application.add_handler(CommandHandler("cancel", cancel))
-    application.add_handler(CommandHandler("back", back_to_home))
-    application.add_handler(CommandHandler("back_to_categories", back_to_categories_group))
-    application.add_handler(CommandHandler("chat", chat_with_ai))
     
-    # هندلرهای مربوط به جستجوی آیتم‌ها
-    application.add_handler(CommandHandler("search", start_item_search))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_item_search))
-    
-    # هندلرهای مربوط به تولید تصویر
-    application.add_handler(CommandHandler("generate", start_generate_image))
-    application.add_handler(CommandHandler("group_image", start_group_image))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, get_prompt))
-    
-    # هندلرهای مربوط به لیدربورد
-    application.add_handler(CommandHandler("leaderboard", show_leaderboard))
-    
-    # هندلرهای مربوط به پیام‌ها
+    # هندلر پیام‌ها
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    # هندلر callback query
     application.add_handler(CallbackQueryHandler(handle_callback_query))
-    application.add_handler(InlineQueryHandler(inline_query))
-    application.add_handler(ChosenInlineResultHandler(handle_inline_selection))
     
     # هندلر خطا
     application.add_error_handler(error_handler)
     
-    # راه‌اندازی صف API
-    threading.Thread(target=process_api_queue, args=(application,), daemon=True).start()
-    
     # راه‌اندازی وب‌سرور
-    app = FastAPI()
-    
-    # تنظیم webhook
-    webhook_url = f"{WEBHOOK_URL}/webhook"
-    await application.bot.set_webhook(url=webhook_url)
-    
-    # بررسی وضعیت webhook
-    webhook_status = await check_webhook_status(application)
-    if webhook_status:
-        logger.info(f"Webhook URL: {webhook_status.url}")
-        logger.info(f"Webhook status: {webhook_status.status}")
-    
     @app.post("/webhook")
     async def webhook(request: Request):
+        if not application:
+            return {"status": "error", "message": "Application not initialized"}
         update = await request.json()
         await application.process_update(Update.de_json(update, application.bot))
         return {"status": "ok"}
     
     @app.get("/")
     async def root():
-        webhook_status = await check_webhook_status(application)
-        return {
-            "status": "running",
-            "webhook_url": webhook_status.url if webhook_status else None,
-            "webhook_status": webhook_status.status if webhook_status else None
-        }
+        if not application:
+            return {"status": "error", "message": "Application not initialized"}
+        try:
+            webhook_info = await application.bot.get_webhook_info()
+            return {
+                "status": "running",
+                "webhook": {
+                    "url": webhook_info.url,
+                    "has_custom_certificate": webhook_info.has_custom_certificate,
+                    "pending_update_count": webhook_info.pending_update_count,
+                    "last_error_date": webhook_info.last_error_date.isoformat() if webhook_info.last_error_date else None,
+                    "last_error_message": webhook_info.last_error_message
+                }
+            }
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
     
     @app.head("/webhook")
     async def webhook_head():
         return {"status": "ok"}
     
     # راه‌اندازی سرور
-    config = uvicorn.Config(app, host="0.0.0.0", port=8000)
-    server = uvicorn.Server(config)
-    await server.serve()
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 
 def analyze_group_message(text, user_id, username, chat_id, callback):
     prompt = f"""

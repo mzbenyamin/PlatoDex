@@ -148,8 +148,8 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS violation_logs
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   user_id INTEGER,
-            username TEXT,
-            message TEXT,
+                  username TEXT,
+                  message TEXT,
                   timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
     
     # ایجاد جدول تاریخچه چت
@@ -157,8 +157,8 @@ def init_db():
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   chat_id INTEGER,
                   user_id INTEGER,
-            username TEXT,
-            message TEXT,
+                  username TEXT,
+                  message TEXT,
                   reply_to_message_id INTEGER,
                   timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
     
@@ -173,23 +173,23 @@ def init_db():
     conn.commit()
     conn.close()
 
-def get_setting(key, default=''):
+def get_setting(context: ContextTypes.DEFAULT_TYPE, key: str, default=''):
     """دریافت تنظیمات از حافظه"""
     return context.bot_data.get('settings', {}).get(key, default)
 
-def update_setting(key, value):
+def update_setting(context: ContextTypes.DEFAULT_TYPE, key: str, value: str):
     """به‌روزرسانی تنظیمات در حافظه"""
     if 'settings' not in context.bot_data:
         context.bot_data['settings'] = {}
     context.bot_data['settings'][key] = value
     logger.info(f"Setting updated: {key} = {value}")
 
-def count_violations(user_id):
+def count_violations(context: ContextTypes.DEFAULT_TYPE, user_id: int):
     """شمارش تخلفات کاربر"""
     violations = context.bot_data.get('violations', {})
     return violations.get(str(user_id), 0)
 
-def log_violation(user_id, username, message):
+def log_violation(context: ContextTypes.DEFAULT_TYPE, user_id: int, username: str, message: str):
     """ثبت تخلف در حافظه"""
     if 'violation_logs' not in context.bot_data:
         context.bot_data['violation_logs'] = []
@@ -209,13 +209,13 @@ def log_violation(user_id, username, message):
     
     logger.info(f"Violation logged for user {user_id} ({username}): {message}")
 
-def clear_violations(user_id):
+def clear_violations(context: ContextTypes.DEFAULT_TYPE, user_id: int):
     """پاک کردن تخلفات کاربر"""
     if 'violations' in context.bot_data:
         context.bot_data['violations'][str(user_id)] = 0
     logger.info(f"Violations cleared for user {user_id}")
 
-def add_to_chat_history(chat_id, user_id, username, message, reply_to_message_id=None):
+def add_to_chat_history(context: ContextTypes.DEFAULT_TYPE, chat_id: int, user_id: int, username: str, message: str, reply_to_message_id: Optional[int] = None):
     """افزودن پیام به تاریخچه چت"""
     if 'chat_history' not in context.bot_data:
         context.bot_data['chat_history'] = []
@@ -235,7 +235,7 @@ def add_to_chat_history(chat_id, user_id, username, message, reply_to_message_id
     context.bot_data['chat_history'].append(chat_entry)
     logger.info(f"Message added to chat history for user {user_id} (@{username})")
 
-def get_recent_chat_history(chat_id, limit=10):
+def get_recent_chat_history(context: ContextTypes.DEFAULT_TYPE, chat_id: int, limit: int = 10):
     """دریافت تاریخچه اخیر چت"""
     if 'chat_history' not in context.bot_data:
         return []
@@ -245,48 +245,35 @@ def get_recent_chat_history(chat_id, limit=10):
 
 # --- صف API ---
 api_queue = queue.Queue()
-def process_api_queue():
+def process_api_queue(context: ContextTypes.DEFAULT_TYPE = None):
     while True:
         try:
             text, model, callback = api_queue.get()
-            logger.info(f"Processing API request: {text[:50]}...")
-            url = f"https://text.pollinations.ai/{text}&model={model}"
-            for attempt in range(3):
-                try:
-                    response = requests.get(url)
-                    response.raise_for_status()
-                    logger.info(f"API response: {response.text[:50]}...")
-                    callback(response.text.strip())
-                    time.sleep(2)
-                    break
-                except requests.HTTPError as e:
-                    if e.response.status_code == 429:
-                        logger.warning(f"Rate limit hit, retrying after {2 * (attempt + 1)} seconds...")
-                        time.sleep(2 * (attempt + 1))
-                        continue
-                    else:
-                        logger.error(f"HTTP Error: {e}")
-                        callback(None)
-                        break
-                except requests.RequestException as e:
-                    logger.error(f"Request Error: {e}")
-                    callback(None)
-                    break
-            else:
-                logger.error("Failed after retries.")
+            if not text:
+                continue
+            
+            # Process the text with the specified model
+            try:
+                # Add your API call logic here
+                # For now, we'll just echo the text
+                response = text
+                callback(response)
+            except Exception as e:
+                logger.error(f"Error processing text: {e}")
                 callback(None)
+            
             api_queue.task_done()
         except Exception as e:
             logger.error(f"Error in API queue: {e}")
-threading.Thread(target=process_api_queue, daemon=True).start()
-def analyze_message(text, model='openai', callback=lambda x: None):
+
+def analyze_message(context: ContextTypes.DEFAULT_TYPE, text, model='openai', callback=lambda x: None):
     api_queue.put((text, model, callback))
 
-def should_respond_or_violate(text, bot_username, user_id, username, callback):
-    response_triggers = get_setting('response_triggers', '')
-    no_response_triggers = get_setting('no_response_triggers', '')
-    violation_triggers = get_setting('violation_triggers', '')
-    no_violation_triggers = get_setting('no_violation_triggers', '')
+def should_respond_or_violate(context: ContextTypes.DEFAULT_TYPE, text, bot_username, user_id, username, callback):
+    response_triggers = get_setting(context, 'response_triggers', '')
+    no_response_triggers = get_setting(context, 'no_response_triggers', '')
+    violation_triggers = get_setting(context, 'violation_triggers', '')
+    no_violation_triggers = get_setting(context, 'no_violation_triggers', '')
     logger.info(f"Analyzing message from {user_id} (@{username}): {text}")
     prompt = f"""
     شما یک دستیار هوشمند در گروه‌های تلگرامی هستید که به مدیریت گروه کمک می‌کنید و به سوالات کاربران پاسخ می‌دهید.
@@ -303,72 +290,36 @@ def should_respond_or_violate(text, bot_username, user_id, username, callback):
     - 'تخلف': اگر پیام تخلف است
     - 'هیچی': اگر هیچ کدام از موارد بالا صدق نمی‌کند
     """
-    analyze_message(prompt, model='openai', callback=callback)
+    analyze_message(context, prompt, callback=callback)
 
-def generate_response(text, user_id, username, callback, chat_history=None):
-    response_triggers = get_setting('response_triggers', '')
-    
-    # Get user's full name if available
-    user_fullname = None
-    if chat_history and len(chat_history) > 0:
-        for msg in chat_history:
-            if str(msg[0]) == str(user_id):
-                user_fullname = msg[1]  # Username is stored in index 1
-                break
-    
-    logger.info(f"Generating response for {user_id} (@{username}): {text}")
-    
-    history_context = ""
-    if chat_history:
-        history_context = "\nتاریخچه چت اخیر:\n"
-        for msg in chat_history:
-            history_context += f"@{msg[1]}: {msg[2]}\n"
-    
-    # Create a personalized prompt with user's information
-    user_info = f"نام و نام کاربری کاربر: @{username}" if not user_fullname else f"نام و نام کاربری کاربر: {user_fullname} (@{username})"
-    
+def generate_response(context: ContextTypes.DEFAULT_TYPE, text, user_id, username, callback, chat_history=None):
+    logger.info(f"Generating response for message from {user_id} (@{username}): {text}")
     prompt = f"""
-    شما دستیار هوشمند PlatoDex هستید و درمورد پلاتو به کاربران کمک میکنید و به صورت خودمونی جذاب و با ایموجی حرف میزنی به صورت نسل Z و کمی با طنز حرف بزن و شوخی کنه. به مشخصات آیتم‌های پلاتو دسترسی داری و می‌تونی به سوالات کاربر در مورد آیتم‌ها جواب بدی و راهنمایی کنی چطور با دستور /i مشخصات کامل رو بگیرن.
-    
-    {user_info}
-    متن و یا سوال و جواب کاربر: {text}
-    تاریخچه پیام کاربران :{history_context}
-    
-    به عنوان یک دستیار حرفه‌ای و دوستانه:
-    - لطفا در پاسخ از نام کاربر استفاده کن و اگر نام انگلیسی است به فارسی تبدیل کن
-    - پاسخ باید کوتاه، دقیق و جذاب باشد
-    - از ایموجی‌های مناسب استفاده کن
-    - با لحن نسل Z و دوستانه صحبت کن
-    - اگر سوال مرتبط با کلمات کلیدی ({response_triggers}) باشد، پاسخ مرتبط بده
-    - اگر نیاز است، هشدار دهید که برای اطلاعات دقیق‌تر با متخصص مشورت کنند
-    - اگر سوالی است که نیاز به اجازه کاربر دارد، از او اجازه بگیرید
-    - اگر سوال در مورد آیتم‌های پلاتو است، راهنمایی کن که از دستور /i استفاده کنند
-    - اگر سوال در مورد چند اکانت است، توضیح بده که از تاریخ 28 فروردین 1404 پلاتو سرورهای قدیمی غیرفعال شده‌اند
-    - اگر سوال در مورد دوستان است، توضیح بده که دیگر نمی‌توان دوستان کاربران دیگر را دید
-    - اگر سوال در مورد سلاطین پلاتو است، توضیح بده که اولین رسانه فارسی‌زبون پلاتو از 1400 با مدیریت بنیامین است
-    
-    مثال:
-    پیام: "سوال دارم"
-    پاسخ: "سلام [نام کاربر]! 😊 چطور می‌تونم کمکت کنم؟ هر سوالی داری بپرس، من اینجام تا راهنماییت کنم! 🎮✨"
+    شما یک دستیار هوشمند در گروه‌های تلگرامی هستید که به مدیریت گروه کمک می‌کنید و به سوالات کاربران پاسخ می‌دهید.
+    به پیام زیر پاسخ دهید:
+    متن پیام: {text}
+    تاریخچه چت اخیر:
+    {chat_history if chat_history else 'بدون تاریخچه'}
+    پاسخ شما باید:
+    1. کوتاه و مفید باشد
+    2. به زبان فارسی باشد
+    3. از اموجی‌های مناسب استفاده کند
+    4. اگر سوال کاربر مشخص نیست، از او توضیح بیشتری بخواهید
     """
-    analyze_message(prompt, model='openai', callback=callback)
+    analyze_message(context, prompt, callback=callback)
 
-def generate_violation_reason(text, callback):
+def generate_violation_reason(context: ContextTypes.DEFAULT_TYPE, text, callback):
+    logger.info(f"Generating violation reason for message: {text}")
     prompt = f"""
     شما یک دستیار هوشمند در گروه‌های تلگرامی هستید که به مدیریت گروه کمک می‌کنید.
-    پیام زیر را تحلیل کنید و دلیل دقیق تخلف را توضیح دهید:
-    - دلیل باید واضح و حرفه‌ای باشد
-    - حداکثر 50 کلمه باشد
-    - از کلمات توهین‌آمیز استفاده نکنید
-    - دلیل باید به صورت مستقیم و بدون ابهام باشد
+    پیام زیر را تحلیل کنید و دلیل تخلف را مشخص کنید:
     متن پیام: {text}
-    مثال:
-    پیام: "سلام به همه"
-    دلیل: پیام خالی یا بی‌محتوا
-    پیام: "لینک دانلود فیلم"
-    دلیل: ارسال لینک غیرمجاز و تبلیغات
+    پاسخ شما باید:
+    1. دلیل تخلف را به صورت واضح توضیح دهد
+    2. به زبان فارسی باشد
+    3. کوتاه و مختصر باشد
     """
-    analyze_message(prompt, model='openai', callback=callback)
+    analyze_message(context, prompt, callback=callback)
 
 # --- دستورات ادمین و هندلرهای مدیریتی ---
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove
@@ -463,102 +414,72 @@ async def clear_violations_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
 
 # --- هندلر پیام متنی هوشمند ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
+    
     message_text = update.message.text
-    bot_username = context.bot.username
-    chat_id = update.message.chat_id
     user_id = update.message.from_user.id
     username = update.message.from_user.username or "Unknown"
-    message_id = update.message.message_id
-    add_to_chat_history(chat_id, user_id, username, message_text, message_id)
-    chat_history = get_recent_chat_history(chat_id)
-    # اگر پیام به ربات مربوط بود یا در چت خصوصی بود
-    if f"@{bot_username}" in message_text or update.message.chat.type == 'private':
-        def callback(reply):
-            if reply and context.job_queue:
-                context.job_queue.run_once(
-                    lambda ctx: ctx.bot.send_message(
-                        chat_id=chat_id,
-                        text=reply,
-                        parse_mode='HTML',
-                        reply_to_message_id=message_id
-                    ),
-                    0
-                )
-        generate_response(message_text, user_id, username, callback, chat_history)
-    else:
-        def callback(decision):
-            if not decision:
-                return
-            decision = decision.lower()
-            if 'پاسخ بده' in decision:
-                def reply_callback(reply):
-                    if reply and context.job_queue:
-                        context.job_queue.run_once(
-                            lambda ctx: ctx.bot.send_message(
-                                chat_id=chat_id,
-                                text=reply,
-                                parse_mode='HTML',
-                                reply_to_message_id=message_id
-                            ),
-                            0
-                        )
-                generate_response(message_text, user_id, username, reply_callback, chat_history)
-            elif 'اجازه بگیر' in decision:
-                keyboard = [[InlineKeyboardButton("بله", callback_data=f"allow_{user_id}"),
-                           InlineKeyboardButton("خیر", callback_data=f"deny_{user_id}")]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                context.job_queue.run_once(
-                    lambda ctx: ctx.bot.send_message(
-                        chat_id=chat_id,
-                        text=f"کاربر {update.message.from_user.mention_html()}، آیا می‌خواهید به سوال شما پاسخ دهم؟",
-                        parse_mode='HTML',
-                        reply_to_message_id=message_id,
-                        reply_markup=reply_markup
-                    ),
-                    0
-                )
-            elif 'تخلف' in decision:
-                log_violation(str(user_id), username, message_text)
-                violation_count = count_violations(str(user_id))
-                def violation_reason_callback(reason):
-                    if not reason:
-                        reason = "محتوای غیرمجاز یا تخلف از قوانین"
-                    context.job_queue.run_once(
-                        lambda ctx: ctx.bot.send_message(
-                            chat_id=chat_id,
-                            text=f"⚠️ <b>اخطار</b>\n\n"
-                                 f"{update.message.from_user.mention_html()} شما یک اخطار دریافت کردید\n\n"
-                                 f"📇 <b>علت:</b> {reason}\n\n"
-                                 f"❗️<b>تعداد اخطارهای شما:</b> {violation_count}",
-                            parse_mode='HTML',
-                            reply_to_message_id=message_id
-                        ),
-                        0
-                    )
-                generate_violation_reason(message_text, violation_reason_callback)
-        should_respond_or_violate(message_text, bot_username, user_id, username, callback)
+    
+    # افزودن پیام به تاریخچه چت
+    add_to_chat_history(context, update.message.chat_id, user_id, username, message_text, update.message.message_id)
+    
+    # بررسی تخلف
+    if message_text.lower() in ['spam', 'ad', 'link']:
+        log_violation(context, str(user_id), username, message_text)
+        violation_count = count_violations(context, str(user_id))
+        
+        if violation_count >= 3:
+            await update.message.reply_text(
+                f"کاربر {username} به دلیل تخلفات مکرر از گروه اخراج شد."
+            )
+            await context.bot.ban_chat_member(
+                chat_id=update.message.chat_id,
+                user_id=user_id
+            )
+        else:
+            await update.message.reply_text(
+                f"کاربر {username} به دلیل تخلف اخطار دریافت کرد.\n"
+                f"تعداد تخلفات: {violation_count}/3"
+            )
+    
+    # بررسی نیاز به پاسخ
+    async def callback(decision):
+        if decision == 'پاسخ بده':
+            chat_history = get_recent_chat_history(context, update.message.chat_id)
+            generate_response(context, message_text, user_id, username, callback, chat_history)
+        elif decision == 'اجازه بگیر':
+            await update.message.reply_text(
+                f"سلام {username}! 👋\n"
+                f"می‌خواهید به سوال شما پاسخ دهم؟"
+            )
+        elif decision == 'تخلف':
+            log_violation(context, str(user_id), username, message_text)
+            violation_count = count_violations(context, str(user_id))
+            await update.message.reply_text(
+                f"کاربر {username} به دلیل تخلف اخطار دریافت کرد.\n"
+                f"تعداد تخلفات: {violation_count}/3"
+            )
+    
+    should_respond_or_violate(context, message_text, context.bot.username, user_id, username, callback)
 
 # --- هندلر CallbackQuery برای اجازه پاسخ ---
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    if query.data.startswith('allow_'):
-        user_id = query.data.split('_')[1]
-        message = query.message.reply_to_message
-        if message:
-            def reply_callback(reply):
-                if reply and context.job_queue:
-                    context.job_queue.run_once(
-                        lambda ctx: ctx.bot.send_message(
-                            chat_id=query.message.chat_id,
-                            text=reply,
-                            parse_mode='HTML',
-                            reply_to_message_id=message.message_id
-                        ),
-                        0
-                    )
-            generate_response(message.text, user_id, message.from_user.username or "Unknown", reply_callback)
-    await query.message.delete()
+    
+    if query.data == 'yes':
+        message_text = query.message.text
+        user_id = query.from_user.id
+        username = query.from_user.username or "Unknown"
+        
+        async def reply_callback(reply):
+            if reply:
+                await query.message.reply_text(reply)
+        
+        chat_history = get_recent_chat_history(context, query.message.chat_id)
+        generate_response(context, message_text, user_id, username, reply_callback, chat_history)
+
 # --- فراخوانی init_db و افزودن هندلرها در main ---
 async def main():
     init_db()
@@ -2844,15 +2765,16 @@ async def back_to_categories_group(update: Update, context: ContextTypes.DEFAULT
     
     return SELECT_CATEGORY
 
-async def check_webhook_status(context: ContextTypes.DEFAULT_TYPE):
+async def check_webhook_status(application: Application):
     """بررسی وضعیت webhook"""
     try:
-        if not context or not context.bot:
-            logger.error("Context or bot is not available")
+        if application and application.bot:
+            webhook_info = await application.bot.get_webhook_info()
+            logger.info(f"Webhook status: {webhook_info}")
+            return webhook_info
+        else:
+            logger.error("Application or bot is not available")
             return None
-        webhook_info = await context.bot.get_webhook_info()
-        logger.info(f"Webhook status: {webhook_info.url}")
-        return webhook_info
     except Exception as e:
         logger.error(f"خطا در بررسی وضعیت webhook: {e}")
         return None
@@ -2902,6 +2824,9 @@ async def main():
     
     # هندلر خطا
     application.add_error_handler(error_handler)
+    
+    # راه‌اندازی صف API
+    threading.Thread(target=process_api_queue, args=(application,), daemon=True).start()
     
     # راه‌اندازی وب‌سرور
     app = FastAPI()

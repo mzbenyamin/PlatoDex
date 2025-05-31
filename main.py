@@ -2922,7 +2922,11 @@ async def main():
     # شروع برنامه
     await application.initialize()
     await application.start()
-    await application.run_polling()
+    
+    try:
+        await application.run_polling(allowed_updates=Update.ALL_TYPES)
+    finally:
+        await application.stop()
 
 def analyze_group_message(text, user_id, username, chat_id, callback):
     prompt = f"""
@@ -3032,4 +3036,9 @@ async def list_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"لیست ادمین‌ها:\n{admin_list}")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("برنامه با موفقیت متوقف شد.")
+    except Exception as e:
+        print(f"خطا در اجرای برنامه: {e}")

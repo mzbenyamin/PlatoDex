@@ -132,46 +132,61 @@ SYSTEM_MESSAGE = (
 ADMIN_ID = 7403352779  # Admin user ID
 
 def init_db():
-    """ایجاد جداول مورد نیاز در دیتابیس"""
-    conn = sqlite3.connect('bot.db')
-    c = conn.cursor()
-    
-    # ایجاد جدول تنظیمات
-    c.execute('''CREATE TABLE IF NOT EXISTS settings
-                 (key TEXT PRIMARY KEY, value TEXT)''')
-    
-    # ایجاد جدول تخلفات
-    c.execute('''CREATE TABLE IF NOT EXISTS violations
-                 (user_id INTEGER PRIMARY KEY, count INTEGER DEFAULT 0)''')
-    
-    # ایجاد جدول لاگ تخلفات
-    c.execute('''CREATE TABLE IF NOT EXISTS violation_logs
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  user_id INTEGER,
-                  username TEXT,
-                  message TEXT,
-                  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
-    
-    # ایجاد جدول تاریخچه چت
-    c.execute('''CREATE TABLE IF NOT EXISTS chat_history
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  chat_id INTEGER,
-                  user_id INTEGER,
-                  username TEXT,
-                  message TEXT,
-                  reply_to_message_id INTEGER,
-                  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
-    
-    # ایجاد ایندکس برای جستجوی سریع‌تر
-    c.execute('''CREATE INDEX IF NOT EXISTS idx_chat_history_chat_id 
-                 ON chat_history(chat_id)''')
-    c.execute('''CREATE INDEX IF NOT EXISTS idx_chat_history_user_id 
-                 ON chat_history(user_id)''')
-    c.execute('''CREATE INDEX IF NOT EXISTS idx_chat_history_timestamp 
-                 ON chat_history(timestamp)''')
-    
-    conn.commit()
-    conn.close()
+    """مقداردهی اولیه دیتابیس"""
+    try:
+        conn = sqlite3.connect('bot.db')
+        c = conn.cursor()
+        
+        # ایجاد جدول تنظیمات
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )
+        ''')
+        
+        # ایجاد جدول تخلفات
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS violations (
+                user_id TEXT PRIMARY KEY,
+                count INTEGER DEFAULT 0
+            )
+        ''')
+        
+        # ایجاد جدول لاگ تخلفات
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS violation_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT,
+                username TEXT,
+                message TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # ایجاد جدول تاریخچه چت
+        c.execute('''
+            CREATE TABLE IF NOT EXISTS chat_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id INTEGER,
+                user_id INTEGER,
+                username TEXT,
+                message TEXT,
+                reply_to_message_id INTEGER,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # ایجاد ایندکس‌ها
+        c.execute('CREATE INDEX IF NOT EXISTS idx_chat_history_chat_id ON chat_history(chat_id)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_chat_history_user_id ON chat_history(user_id)')
+        c.execute('CREATE INDEX IF NOT EXISTS idx_chat_history_timestamp ON chat_history(timestamp)')
+        
+        conn.commit()
+        conn.close()
+        logger.info("Database initialized successfully")
+    except Exception as e:
+        logger.error(f"Error initializing database: {e}")
 
 def get_setting(context: ContextTypes.DEFAULT_TYPE, key: str, default=''):
     """دریافت تنظیمات از حافظه"""
@@ -482,18 +497,97 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
 # --- فراخوانی init_db و افزودن هندلرها در main ---
 async def main():
-    init_db()
+    global application
+    
+    # ایجاد برنامه
     application = Application.builder().token(TOKEN).build()
     
-    # Add handlers
-    application.add_handler(CommandHandler("warn", warn))
-    application.add_handler(CommandHandler("violations", violations)) 
-    application.add_handler(CommandHandler("clearviolations", clear_violations_cmd))
+    # مقداردهی اولیه دیتابیس
+    init_db()
+    
+    # راه‌اندازی صف API
+    threading.Thread(target=process_api_queue, args=(application,), daemon=True).start()
+    
+    # تنظیم webhook
+    webhook_url = f"{WEBHOOK_URL}/webhook"
+    await application.bot.set_webhook(url=webhook_url)
+    
+    # بررسی وضعیت webhook
+    webhook_status = await check_webhook_status(application)
+    if not webhook_status:
+        logger.error("Failed to set up webhook")
+        return
+    
+    # اضافه کردن هندلرها
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", start))
+    application.add_handler(CommandHandler("cancel", cancel))
+    application.add_handler(CommandHandler("back", back_to_home))
     application.add_handler(CommandHandler("admin", admin_start))
+    application.add_handler(CommandHandler("warn", warn))
+    application.add_handler(CommandHandler("violations", violations))
+    application.add_handler(CommandHandler("clear_violations", clear_violations_cmd))
+    application.add_handler(CommandHandler("add_admin", add_admin))
+    application.add_handler(CommandHandler("remove_admin", remove_admin))
+    application.add_handler(CommandHandler("list_admins", list_admins))
+    
+    # هندلر پیام‌ها
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(CallbackQueryHandler(handle_callback_query, pattern="^(allow_|deny_).*$"))
-
-    return application
+    
+    # هندلر callback query
+    application.add_handler(CallbackQueryHandler(handle_callback_query))
+    
+    # هندلر خطا
+    application.add_error_handler(error_handler)
+    
+    # راه‌اندازی وب‌سرور
+    @app.post("/webhook")
+    async def webhook(request: Request):
+        if not application:
+            return {"status": "error", "message": "Application not initialized"}
+        try:
+            update = await request.json()
+            await application.process_update(Update.de_json(update, application.bot))
+            return {"status": "ok"}
+        except Exception as e:
+            logger.error(f"Error processing webhook: {e}")
+            return {"status": "error", "message": str(e)}
+    
+    @app.get("/")
+    async def root():
+        if not application:
+            return {"status": "error", "message": "Application not initialized"}
+        try:
+            webhook_info = await application.bot.get_webhook_info()
+            return {
+                "status": "running",
+                "webhook": {
+                    "url": webhook_info.url,
+                    "has_custom_certificate": webhook_info.has_custom_certificate,
+                    "pending_update_count": webhook_info.pending_update_count,
+                    "last_error_date": webhook_info.last_error_date.isoformat() if webhook_info.last_error_date else None,
+                    "last_error_message": webhook_info.last_error_message
+                }
+            }
+        except Exception as e:
+            logger.error(f"Error getting webhook info: {e}")
+            return {"status": "error", "message": str(e)}
+    
+    @app.head("/webhook")
+    async def webhook_head():
+        return {"status": "ok"}
+    
+    # راه‌اندازی سرور
+    config = uvicorn.Config(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        log_level="info",
+        access_log=True,
+        timeout_keep_alive=30
+    )
+    server = uvicorn.Server(config)
+    await server.serve()
 
 application = None
 
@@ -2783,83 +2877,6 @@ async def check_webhook_status(application: Application):
         logger.error(f"Error checking webhook status: {e}")
         return False
 
-async def main():
-    global application
-    
-    # ایجاد برنامه
-    application = Application.builder().token(TOKEN).build()
-    
-    # راه‌اندازی صف API
-    threading.Thread(target=process_api_queue, args=(application,), daemon=True).start()
-    
-    # تنظیم webhook
-    await application.bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
-    
-    # بررسی وضعیت webhook
-    webhook_status = await check_webhook_status(application)
-    if not webhook_status:
-        logger.error("Failed to set up webhook")
-        return
-    
-    # اضافه کردن هندلرها
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", start))
-    application.add_handler(CommandHandler("cancel", cancel))
-    application.add_handler(CommandHandler("back", back_to_home))
-    application.add_handler(CommandHandler("admin", admin_start))
-    application.add_handler(CommandHandler("warn", warn))
-    application.add_handler(CommandHandler("violations", violations))
-    application.add_handler(CommandHandler("clear_violations", clear_violations_cmd))
-    application.add_handler(CommandHandler("add_admin", add_admin))
-    application.add_handler(CommandHandler("remove_admin", remove_admin))
-    application.add_handler(CommandHandler("list_admins", list_admins))
-    
-    # هندلر پیام‌ها
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    # هندلر callback query
-    application.add_handler(CallbackQueryHandler(handle_callback_query))
-    
-    # هندلر خطا
-    application.add_error_handler(error_handler)
-    
-    # راه‌اندازی وب‌سرور
-    @app.post("/webhook")
-    async def webhook(request: Request):
-        if not application:
-            return {"status": "error", "message": "Application not initialized"}
-        update = await request.json()
-        await application.process_update(Update.de_json(update, application.bot))
-        return {"status": "ok"}
-    
-    @app.get("/")
-    async def root():
-        if not application:
-            return {"status": "error", "message": "Application not initialized"}
-        try:
-            webhook_info = await application.bot.get_webhook_info()
-            return {
-                "status": "running",
-                "webhook": {
-                    "url": webhook_info.url,
-                    "has_custom_certificate": webhook_info.has_custom_certificate,
-                    "pending_update_count": webhook_info.pending_update_count,
-                    "last_error_date": webhook_info.last_error_date.isoformat() if webhook_info.last_error_date else None,
-                    "last_error_message": webhook_info.last_error_message
-                }
-            }
-        except Exception as e:
-            return {"status": "error", "message": str(e)}
-    
-    @app.head("/webhook")
-    async def webhook_head():
-        return {"status": "ok"}
-    
-    # راه‌اندازی سرور
-    config = uvicorn.Config(app, host="0.0.0.0", port=8000)
-    server = uvicorn.Server(config)
-    await server.serve()
-
 def analyze_group_message(text, user_id, username, chat_id, callback):
     prompt = f"""
     شما یک دستیار هوشمند برای مدیریت گروه‌های تلگرامی هستید. وظیفه شما تحلیل پیام‌ها و ارائه راهنمایی‌های مدیریتی است.
@@ -2970,5 +2987,7 @@ if __name__ == '__main__':
     try:
         import asyncio
         asyncio.run(main())
+    except KeyboardInterrupt:
+        print("برنامه با موفقیت متوقف شد.")
     except Exception as e:
         print(f"خطا در اجرای برنامه: {e}")

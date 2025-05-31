@@ -174,7 +174,7 @@ def init_db():
     conn.close()
 
 def get_setting(key, default=''):
-    conn = sqlite3.connect('violations.db')
+    conn = sqlite3.connect('bot.db')
     cursor = conn.cursor()
     cursor.execute('SELECT value FROM settings WHERE key = ?', (key,))
     result = cursor.fetchone()
@@ -182,7 +182,7 @@ def get_setting(key, default=''):
     return result[0] if result else default
 
 def update_setting(key, value):
-    conn = sqlite3.connect('violations.db')
+    conn = sqlite3.connect('bot.db')
     cursor = conn.cursor()
     cursor.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, value))
     conn.commit()
@@ -190,7 +190,7 @@ def update_setting(key, value):
     logger.info(f"Setting updated: {key} = {value}")
 
 def count_violations(user_id):
-    conn = sqlite3.connect('violations.db')
+    conn = sqlite3.connect('bot.db')
     cursor = conn.cursor()
     cursor.execute('SELECT COUNT(*) FROM violations WHERE user_id = ?', (user_id,))
     count = cursor.fetchone()[0]
@@ -198,16 +198,16 @@ def count_violations(user_id):
     return count
 
 def log_violation(user_id, username, message):
-    conn = sqlite3.connect('violations.db')
+    conn = sqlite3.connect('bot.db')
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO violations (user_id, username, message) VALUES (?, ?, ?)',
+    cursor.execute('INSERT INTO violation_logs (user_id, username, message) VALUES (?, ?, ?)',
                    (user_id, username, message))
     conn.commit()
     conn.close()
     logger.info(f"Violation logged for user {user_id} ({username}): {message}")
 
 def clear_violations(user_id):
-    conn = sqlite3.connect('violations.db')
+    conn = sqlite3.connect('bot.db')
     cursor = conn.cursor()
     cursor.execute('DELETE FROM violations WHERE user_id = ?', (user_id,))
     conn.commit()
@@ -215,7 +215,7 @@ def clear_violations(user_id):
     logger.info(f"Violations cleared for user {user_id}")
 
 def add_to_chat_history(chat_id, user_id, username, message, reply_to_message_id=None):
-    conn = sqlite3.connect('violations.db')
+    conn = sqlite3.connect('bot.db')
     cursor = conn.cursor()
     cursor.execute('SELECT COUNT(*) FROM chat_history')
     count = cursor.fetchone()[0]
@@ -2844,11 +2844,14 @@ async def back_to_categories_group(update: Update, context: ContextTypes.DEFAULT
     
     return SELECT_CATEGORY
 
-async def check_webhook_status():
+async def check_webhook_status(context: ContextTypes.DEFAULT_TYPE):
     """بررسی وضعیت webhook"""
     try:
-        webhook_info = await application.bot.get_webhook_info()
-        logger.info(f"Webhook Info: {webhook_info}")
+        if not context or not context.bot:
+            logger.error("Context or bot is not available")
+            return None
+        webhook_info = await context.bot.get_webhook_info()
+        logger.info(f"Webhook status: {webhook_info.url}")
         return webhook_info
     except Exception as e:
         logger.error(f"خطا در بررسی وضعیت webhook: {e}")
@@ -2858,97 +2861,56 @@ async def main():
     # ایجاد برنامه
     application = Application.builder().token(TOKEN).build()
     
+    # ایجاد دیتابیس
+    init_db()
+    
     # اضافه کردن هندلرها
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", start))
-    application.add_handler(CommandHandler("i", start_item_search))
-    application.add_handler(CommandHandler("p", start_group_image))
-    application.add_handler(CommandHandler("chat", chat_with_ai))
-    application.add_handler(CommandHandler("cancel", cancel))
     application.add_handler(CommandHandler("admin", admin_start))
     application.add_handler(CommandHandler("warn", warn))
     application.add_handler(CommandHandler("violations", violations))
     application.add_handler(CommandHandler("clear_violations", clear_violations_cmd))
-    
-    # اضافه کردن هندلرهای ادمین
     application.add_handler(CommandHandler("add_admin", add_admin))
     application.add_handler(CommandHandler("remove_admin", remove_admin))
     application.add_handler(CommandHandler("list_admins", list_admins))
+    application.add_handler(CommandHandler("cancel", cancel))
+    application.add_handler(CommandHandler("back", back_to_home))
+    application.add_handler(CommandHandler("back_to_categories", back_to_categories_group))
+    application.add_handler(CommandHandler("chat", chat_with_ai))
     
-    # هندلرهای چت با هوش مصنوعی
-    ai_chat_handler = ConversationHandler(
-        entry_points=[CommandHandler("chat", chat_with_ai)],
-        states={
-            "chatting": [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_message)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel)]
-    )
-    application.add_handler(ai_chat_handler)
+    # هندلرهای مربوط به جستجوی آیتم‌ها
+    application.add_handler(CommandHandler("search", start_item_search))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, process_item_search))
     
-    # هندلرهای جستجوی آیتم
-    item_search_handler = ConversationHandler(
-        entry_points=[CommandHandler("i", start_item_search)],
-        states={
-            "searching": [MessageHandler(filters.TEXT & ~filters.COMMAND, search_by_name)],
-            "processing": [MessageHandler(filters.TEXT & ~filters.COMMAND, process_item_search)]
-        },
-        fallbacks=[CommandHandler("cancel", cancel)]
-    )
-    application.add_handler(item_search_handler)
+    # هندلرهای مربوط به تولید تصویر
+    application.add_handler(CommandHandler("generate", start_generate_image))
+    application.add_handler(CommandHandler("group_image", start_group_image))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, get_prompt))
     
-    # هندلرهای تولید تصویر
-    image_generation_handler = ConversationHandler(
-        entry_points=[CommandHandler("p", start_group_image)],
-        states={
-            "getting_prompt": [MessageHandler(filters.TEXT & ~filters.COMMAND, get_prompt)],
-            "selecting_size": [CallbackQueryHandler(select_size, pattern="^size_")]
-        },
-        fallbacks=[CommandHandler("cancel", cancel)]
-    )
-    application.add_handler(image_generation_handler)
+    # هندلرهای مربوط به لیدربورد
+    application.add_handler(CommandHandler("leaderboard", show_leaderboard))
     
-    # هندلرهای کال‌بک
-    application.add_handler(CallbackQueryHandler(handle_callback_query))
-    application.add_handler(CallbackQueryHandler(handle_inline_selection, pattern="^select_"))
-    application.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
-    application.add_handler(CallbackQueryHandler(back_to_categories_group, pattern="^back_to_categories_group$"))
-    application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^page_"))
-    application.add_handler(CallbackQueryHandler(select_category, pattern="^category_"))
-    application.add_handler(CallbackQueryHandler(select_item, pattern="^item_"))
-    application.add_handler(CallbackQueryHandler(back_to_items, pattern="^back_to_items$"))
-    application.add_handler(CallbackQueryHandler(select_group_item, pattern="^group_item_"))
-    application.add_handler(CallbackQueryHandler(process_item_in_group, pattern="^process_item_"))
-    application.add_handler(CallbackQueryHandler(retry_generate_image, pattern="^retry_image_"))
-    application.add_handler(CallbackQueryHandler(regenerate_group_image, pattern="^regenerate_image_"))
-    
-    # هندلرهای پیام
+    # هندلرهای مربوط به پیام‌ها
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_ai_message))
-    
-    # هندلرهای اینلاین
+    application.add_handler(CallbackQueryHandler(handle_callback_query))
     application.add_handler(InlineQueryHandler(inline_query))
+    application.add_handler(ChosenInlineResultHandler(handle_inline_selection))
     
     # هندلر خطا
     application.add_error_handler(error_handler)
     
-    # اضافه کردن جاب برای بررسی یادآوری‌ها
-    job_queue = application.job_queue
-    job_queue.run_repeating(check_reminders, interval=3600)  # هر ساعت یکبار
-    
-    # شروع برنامه
-    await application.initialize()
-    await application.start()
+    # راه‌اندازی وب‌سرور
+    app = FastAPI()
     
     # تنظیم webhook
-    webhook_url = os.getenv('WEBHOOK_URL', 'https://platodex.onrender.com/webhook')
+    webhook_url = f"{WEBHOOK_URL}/webhook"
     await application.bot.set_webhook(url=webhook_url)
     
     # بررسی وضعیت webhook
-    webhook_status = await check_webhook_status()
-    logger.info(f"Webhook Status: {webhook_status}")
-    
-    # راه‌اندازی FastAPI
-    app = FastAPI()
+    webhook_status = await check_webhook_status(application)
+    if webhook_status:
+        logger.info(f"Webhook URL: {webhook_status.url}")
+        logger.info(f"Webhook status: {webhook_status.status}")
     
     @app.post("/webhook")
     async def webhook(request: Request):
@@ -2958,11 +2920,11 @@ async def main():
     
     @app.get("/")
     async def root():
-        webhook_status = await check_webhook_status()
+        webhook_status = await check_webhook_status(application)
         return {
-            "status": "ok",
-            "message": "Bot is running",
-            "webhook_status": webhook_status
+            "status": "running",
+            "webhook_url": webhook_status.url if webhook_status else None,
+            "webhook_status": webhook_status.status if webhook_status else None
         }
     
     @app.head("/webhook")
@@ -2970,8 +2932,7 @@ async def main():
         return {"status": "ok"}
     
     # راه‌اندازی سرور
-    port = int(os.getenv("PORT", 8000))
-    config = uvicorn.Config(app, host="0.0.0.0", port=port)
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000)
     server = uvicorn.Server(config)
     await server.serve()
 

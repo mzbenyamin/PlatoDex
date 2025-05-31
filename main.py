@@ -132,40 +132,46 @@ SYSTEM_MESSAGE = (
 ADMIN_ID = 7403352779  # Admin user ID
 
 def init_db():
-    conn = sqlite3.connect('violations.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS violations (
-            user_id TEXT,
-            username TEXT,
-            message TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS chat_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id TEXT,
-            user_id TEXT,
-            username TEXT,
-            message TEXT,
-            reply_to_message_id TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('response_triggers', ''))
-    cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('no_response_triggers', ''))
-    cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('violation_triggers', ''))
-    cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('no_violation_triggers', ''))
+    """ایجاد جداول مورد نیاز در دیتابیس"""
+    conn = sqlite3.connect('bot.db')
+    c = conn.cursor()
+    
+    # ایجاد جدول تنظیمات
+    c.execute('''CREATE TABLE IF NOT EXISTS settings
+                 (key TEXT PRIMARY KEY, value TEXT)''')
+    
+    # ایجاد جدول تخلفات
+    c.execute('''CREATE TABLE IF NOT EXISTS violations
+                 (user_id INTEGER PRIMARY KEY, count INTEGER DEFAULT 0)''')
+    
+    # ایجاد جدول لاگ تخلفات
+    c.execute('''CREATE TABLE IF NOT EXISTS violation_logs
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  user_id INTEGER,
+                  username TEXT,
+                  message TEXT,
+                  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+    
+    # ایجاد جدول تاریخچه چت
+    c.execute('''CREATE TABLE IF NOT EXISTS chat_history
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  chat_id INTEGER,
+                  user_id INTEGER,
+                  username TEXT,
+                  message TEXT,
+                  reply_to_message_id INTEGER,
+                  timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
+    
+    # ایجاد ایندکس برای جستجوی سریع‌تر
+    c.execute('''CREATE INDEX IF NOT EXISTS idx_chat_history_chat_id 
+                 ON chat_history(chat_id)''')
+    c.execute('''CREATE INDEX IF NOT EXISTS idx_chat_history_user_id 
+                 ON chat_history(user_id)''')
+    c.execute('''CREATE INDEX IF NOT EXISTS idx_chat_history_timestamp 
+                 ON chat_history(timestamp)''')
+    
     conn.commit()
     conn.close()
-    logger.info("Database initialized")
 
 def get_setting(key, default=''):
     conn = sqlite3.connect('violations.db')
@@ -2838,6 +2844,16 @@ async def back_to_categories_group(update: Update, context: ContextTypes.DEFAULT
     
     return SELECT_CATEGORY
 
+async def check_webhook_status():
+    """بررسی وضعیت webhook"""
+    try:
+        webhook_info = await application.bot.get_webhook_info()
+        logger.info(f"Webhook Info: {webhook_info}")
+        return webhook_info
+    except Exception as e:
+        logger.error(f"خطا در بررسی وضعیت webhook: {e}")
+        return None
+
 async def main():
     # ایجاد برنامه
     application = Application.builder().token(TOKEN).build()
@@ -2927,6 +2943,10 @@ async def main():
     webhook_url = os.getenv('WEBHOOK_URL', 'https://platodex.onrender.com/webhook')
     await application.bot.set_webhook(url=webhook_url)
     
+    # بررسی وضعیت webhook
+    webhook_status = await check_webhook_status()
+    logger.info(f"Webhook Status: {webhook_status}")
+    
     # راه‌اندازی FastAPI
     app = FastAPI()
     
@@ -2938,7 +2958,12 @@ async def main():
     
     @app.get("/")
     async def root():
-        return {"status": "ok", "message": "Bot is running"}
+        webhook_status = await check_webhook_status()
+        return {
+            "status": "ok",
+            "message": "Bot is running",
+            "webhook_status": webhook_status
+        }
     
     @app.head("/webhook")
     async def webhook_head():

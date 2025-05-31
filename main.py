@@ -148,8 +148,8 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS violation_logs
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   user_id INTEGER,
-                  username TEXT,
-                  message TEXT,
+            username TEXT,
+            message TEXT,
                   timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
     
     # ایجاد جدول تاریخچه چت
@@ -157,8 +157,8 @@ def init_db():
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   chat_id INTEGER,
                   user_id INTEGER,
-                  username TEXT,
-                  message TEXT,
+            username TEXT,
+            message TEXT,
                   reply_to_message_id INTEGER,
                   timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
     
@@ -174,74 +174,74 @@ def init_db():
     conn.close()
 
 def get_setting(key, default=''):
-    conn = sqlite3.connect('bot.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT value FROM settings WHERE key = ?', (key,))
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else default
+    """دریافت تنظیمات از حافظه"""
+    return context.bot_data.get('settings', {}).get(key, default)
 
 def update_setting(key, value):
-    conn = sqlite3.connect('bot.db')
-    cursor = conn.cursor()
-    cursor.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, value))
-    conn.commit()
-    conn.close()
+    """به‌روزرسانی تنظیمات در حافظه"""
+    if 'settings' not in context.bot_data:
+        context.bot_data['settings'] = {}
+    context.bot_data['settings'][key] = value
     logger.info(f"Setting updated: {key} = {value}")
 
 def count_violations(user_id):
-    conn = sqlite3.connect('bot.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM violations WHERE user_id = ?', (user_id,))
-    count = cursor.fetchone()[0]
-    conn.close()
-    return count
+    """شمارش تخلفات کاربر"""
+    violations = context.bot_data.get('violations', {})
+    return violations.get(str(user_id), 0)
 
 def log_violation(user_id, username, message):
-    conn = sqlite3.connect('bot.db')
-    cursor = conn.cursor()
-    cursor.execute('INSERT INTO violation_logs (user_id, username, message) VALUES (?, ?, ?)',
-                   (user_id, username, message))
-    conn.commit()
-    conn.close()
+    """ثبت تخلف در حافظه"""
+    if 'violation_logs' not in context.bot_data:
+        context.bot_data['violation_logs'] = []
+    
+    log_entry = {
+        'user_id': user_id,
+        'username': username,
+        'message': message,
+        'timestamp': datetime.now().isoformat()
+    }
+    context.bot_data['violation_logs'].append(log_entry)
+    
+    # به‌روزرسانی تعداد تخلفات
+    if 'violations' not in context.bot_data:
+        context.bot_data['violations'] = {}
+    context.bot_data['violations'][str(user_id)] = context.bot_data['violations'].get(str(user_id), 0) + 1
+    
     logger.info(f"Violation logged for user {user_id} ({username}): {message}")
 
 def clear_violations(user_id):
-    conn = sqlite3.connect('bot.db')
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM violations WHERE user_id = ?', (user_id,))
-    conn.commit()
-    conn.close()
+    """پاک کردن تخلفات کاربر"""
+    if 'violations' in context.bot_data:
+        context.bot_data['violations'][str(user_id)] = 0
     logger.info(f"Violations cleared for user {user_id}")
 
 def add_to_chat_history(chat_id, user_id, username, message, reply_to_message_id=None):
-    conn = sqlite3.connect('bot.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM chat_history')
-    count = cursor.fetchone()[0]
-    if count >= 1000:
-        cursor.execute('DELETE FROM chat_history WHERE id = (SELECT MIN(id) FROM chat_history)')
-    cursor.execute('''
-        INSERT INTO chat_history (chat_id, user_id, username, message, reply_to_message_id)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (chat_id, user_id, username, message, reply_to_message_id))
-    conn.commit()
-    conn.close()
+    """افزودن پیام به تاریخچه چت"""
+    if 'chat_history' not in context.bot_data:
+        context.bot_data['chat_history'] = []
+    
+    # محدود کردن تعداد پیام‌ها به 1000
+    if len(context.bot_data['chat_history']) >= 1000:
+        context.bot_data['chat_history'] = context.bot_data['chat_history'][-999:]
+    
+    chat_entry = {
+        'chat_id': chat_id,
+        'user_id': user_id,
+        'username': username,
+        'message': message,
+        'reply_to_message_id': reply_to_message_id,
+        'timestamp': datetime.now().isoformat()
+    }
+    context.bot_data['chat_history'].append(chat_entry)
     logger.info(f"Message added to chat history for user {user_id} (@{username})")
 
 def get_recent_chat_history(chat_id, limit=10):
-    conn = sqlite3.connect('violations.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT user_id, username, message, reply_to_message_id, timestamp
-        FROM chat_history
-        WHERE chat_id = ?
-        ORDER BY timestamp DESC
-        LIMIT ?
-    ''', (chat_id, limit))
-    history = cursor.fetchall()
-    conn.close()
-    return history
+    """دریافت تاریخچه اخیر چت"""
+    if 'chat_history' not in context.bot_data:
+        return []
+    
+    chat_history = [msg for msg in context.bot_data['chat_history'] if msg['chat_id'] == chat_id]
+    return chat_history[-limit:]
 
 # --- صف API ---
 api_queue = queue.Queue()
@@ -2861,8 +2861,12 @@ async def main():
     # ایجاد برنامه
     application = Application.builder().token(TOKEN).build()
     
-    # ایجاد دیتابیس
-    init_db()
+    # مقداردهی اولیه داده‌ها
+    application.bot_data['settings'] = {}
+    application.bot_data['violations'] = {}
+    application.bot_data['violation_logs'] = []
+    application.bot_data['chat_history'] = []
+    application.bot_data['admins'] = []
     
     # اضافه کردن هندلرها
     application.add_handler(CommandHandler("start", start))
@@ -3002,7 +3006,6 @@ async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("لطفاً شناسه کاربری ادمین را وارد کنید.")
         return
-    
     try:
         admin_id = int(context.args[0])
         admins = context.bot_data.get("admins", [])

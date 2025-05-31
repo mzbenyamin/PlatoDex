@@ -26,6 +26,10 @@ from datetime import datetime, timedelta
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ایجاد برنامه FastAPI
+app = FastAPI()
+application = None
+
 # توکن و آدرس‌ها
 TOKEN = '7764880184:AAEAp5oyNfB__Cotdmtxb9BHnWgwydRN0ME'
 IMAGE_API_URL = 'https://pollinations.ai/prompt/'
@@ -39,7 +43,7 @@ SEARCH_ITEM, SELECT_CATEGORY = range(2)
 SELECT_SIZE, GET_PROMPT = range(2, 4)
 DEFAULT_CHAT_ID = 789912945
 PROCESSED_MESSAGES = set()
-PROCESSING_LOCK = asyncio.Lock()  # تغییر به asyncio.Lock
+PROCESSING_LOCK = asyncio.Lock()
 
 # این تابع جدید را اضافه کنید که callback_data امن ایجاد می‌کند
 def generate_safe_callback_data(prompt):
@@ -540,43 +544,6 @@ async def main():
     # هندلر خطا
     application.add_error_handler(error_handler)
     
-    # راه‌اندازی وب‌سرور
-    @app.post("/webhook")
-    async def webhook(request: Request):
-        if not application:
-            return {"status": "error", "message": "Application not initialized"}
-        try:
-            update = await request.json()
-            await application.process_update(Update.de_json(update, application.bot))
-            return {"status": "ok"}
-        except Exception as e:
-            logger.error(f"Error processing webhook: {e}")
-            return {"status": "error", "message": str(e)}
-    
-    @app.get("/")
-    async def root():
-        if not application:
-            return {"status": "error", "message": "Application not initialized"}
-        try:
-            webhook_info = await application.bot.get_webhook_info()
-            return {
-                "status": "running",
-                "webhook": {
-                    "url": webhook_info.url,
-                    "has_custom_certificate": webhook_info.has_custom_certificate,
-                    "pending_update_count": webhook_info.pending_update_count,
-                    "last_error_date": webhook_info.last_error_date.isoformat() if webhook_info.last_error_date else None,
-                    "last_error_message": webhook_info.last_error_message
-                }
-            }
-        except Exception as e:
-            logger.error(f"Error getting webhook info: {e}")
-            return {"status": "error", "message": str(e)}
-    
-    @app.head("/webhook")
-    async def webhook_head():
-        return {"status": "ok"}
-    
     # راه‌اندازی سرور
     config = uvicorn.Config(
         app,
@@ -589,32 +556,51 @@ async def main():
     server = uvicorn.Server(config)
     await server.serve()
 
-application = None
-
-app = FastAPI()
-
 @app.post("/webhook")
 async def webhook(request: Request):
     global application
-    update = await request.json()
-    update_obj = Update.de_json(update, application.bot)
-    update_id = update_obj.update_id
-    logger.info(f"دریافت درخواست با update_id: {update_id}")
-    async with PROCESSING_LOCK:
-        if update_id in PROCESSED_MESSAGES:
-            logger.warning(f"درخواست تکراری با update_id: {update_id} - نادیده گرفته شد")
-            return {"status": "ok"}
-        PROCESSED_MESSAGES.add(update_id)
-    asyncio.create_task(application.process_update(update_obj))
-    return {"status": "ok"}
+    if not application:
+        return {"status": "error", "message": "Application not initialized"}
+    try:
+        update = await request.json()
+        update_obj = Update.de_json(update, application.bot)
+        update_id = update_obj.update_id
+        logger.info(f"دریافت درخواست با update_id: {update_id}")
+        async with PROCESSING_LOCK:
+            if update_id in PROCESSED_MESSAGES:
+                logger.warning(f"درخواست تکراری با update_id: {update_id} - نادیده گرفته شد")
+                return {"status": "ok"}
+            PROCESSED_MESSAGES.add(update_id)
+        await application.process_update(update_obj)
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error(f"Error processing webhook: {e}")
+        return {"status": "error", "message": str(e)}
 
 @app.get("/")
 async def root():
-    return {"message": "PlatoDex Bot is running!"}
+    global application
+    if not application:
+        return {"status": "error", "message": "Application not initialized"}
+    try:
+        webhook_info = await application.bot.get_webhook_info()
+        return {
+            "status": "running",
+            "webhook": {
+                "url": webhook_info.url,
+                "has_custom_certificate": webhook_info.has_custom_certificate,
+                "pending_update_count": webhook_info.pending_update_count,
+                "last_error_date": webhook_info.last_error_date.isoformat() if webhook_info.last_error_date else None,
+                "last_error_message": webhook_info.last_error_message
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error getting webhook info: {e}")
+        return {"status": "error", "message": str(e)}
 
 @app.head("/webhook")
 async def webhook_head():
-    return {"status": "online"}
+    return {"status": "ok"}
 
 def clean_text(text):
     if not text:

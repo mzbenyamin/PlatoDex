@@ -1,4 +1,4 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent, InputFile, error
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InlineQueryResultArticle, InputTextMessageContent, InputFile, error, ChatPermissions
 from telegram.ext import Application, CommandHandler, ContextTypes, InlineQueryHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler
 import requests
 from bs4 import BeautifulSoup
@@ -20,6 +20,7 @@ import uvicorn
 import sqlite3
 import queue
 import threading
+from datetime import datetime, timedelta
 
 # تنظیم لاگ
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -2581,13 +2582,106 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
     thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
-    user_message = update.message.text.lower()
+    user_message = update.message.text
+    username = update.message.from_user.username or "Unknown"
     replied_message = update.message.reply_to_message
 
-    # Get user's full name
-    user = update.effective_user
-    user_fullname = f"{user.first_name} {user.last_name if user.last_name else ''}".strip()
+    # تحلیل پیام برای مدیریت گروه
+    def group_analysis_callback(analysis_result):
+        if not analysis_result:
+            return
+        
+        try:
+            analysis = json.loads(analysis_result)
+            
+            # بررسی تخلفات
+            if analysis.get("violation"):
+                violation_type = analysis.get("violation_type", "")
+                if violation_type == "link":
+                    context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+                    update.message.reply_text(
+                        f"⚠️ پیام حاوی لینک حذف شد.\nکاربر: {update.message.from_user.mention_html()}",
+                        parse_mode='HTML',
+                        message_thread_id=thread_id
+                    )
+                elif violation_type == "spam":
+                    context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+                    update.message.reply_text(
+                        f"⚠️ پیام اسپم حذف شد.\nکاربر: {update.message.from_user.mention_html()}",
+                        parse_mode='HTML',
+                        message_thread_id=thread_id
+                    )
+            
+            # گزارش به ادمین‌ها
+            if analysis.get("needs_admin_report"):
+                admin_message = f"🚨 گزارش مدیریتی:\nکاربر: {update.message.from_user.mention_html()}\nدلیل: {analysis.get('report_reason')}"
+                # ارسال به ادمین‌ها
+                for admin_id in context.bot_data.get("admins", []):
+                    try:
+                        context.bot.send_message(chat_id=admin_id, text=admin_message, parse_mode='HTML')
+                    except Exception as e:
+                        logger.error(f"خطا در ارسال گزارش به ادمین {admin_id}: {e}")
+            
+            # اعمال سکوت
+            if analysis.get("needs_mute"):
+                duration = analysis.get("mute_duration", "1h")
+                try:
+                    context.bot.restrict_chat_member(
+                        chat_id=chat_id,
+                        user_id=user_id,
+                        permissions=ChatPermissions(can_send_messages=False),
+                        until_date=datetime.now() + timedelta(hours=1)
+                    )
+                    update.message.reply_text(
+                        f"🔇 کاربر {update.message.from_user.mention_html()} به مدت {duration} سکوت شد.",
+                        parse_mode='HTML',
+                        message_thread_id=thread_id
+                    )
+                except Exception as e:
+                    logger.error(f"خطا در اعمال سکوت: {e}")
+            
+            # ثبت یادآوری
+            if analysis.get("is_reminder"):
+                reminder_details = analysis.get("reminder_details", "")
+                # ذخیره یادآوری در دیتابیس یا حافظه
+                context.bot_data.setdefault("reminders", []).append({
+                    "chat_id": chat_id,
+                    "user_id": user_id,
+                    "details": reminder_details,
+                    "created_at": datetime.now().isoformat()
+                })
+                update.message.reply_text(
+                    f"⏰ یادآوری ثبت شد:\n{reminder_details}",
+                    message_thread_id=thread_id
+                )
+            
+            # اعطای لقب
+            if analysis.get("deserves_reward"):
+                suggested_title = analysis.get("suggested_title", "")
+                reward_reason = analysis.get("reward_reason", "")
+                try:
+                    context.bot.set_chat_administrator_custom_title(
+                        chat_id=chat_id,
+                        user_id=user_id,
+                        custom_title=suggested_title
+                    )
+                    update.message.reply_text(
+                        f"🏆 به {update.message.from_user.mention_html()} لقب «{suggested_title}» اعطا شد!\nدلیل: {reward_reason}",
+                        parse_mode='HTML',
+                        message_thread_id=thread_id
+                    )
+                except Exception as e:
+                    logger.error(f"خطا در اعطای لقب: {e}")
+        
+        except json.JSONDecodeError as e:
+            logger.error(f"خطا در پردازش پاسخ تحلیل: {e}")
+        except Exception as e:
+            logger.error(f"خطا در پردازش تحلیل گروه: {e}")
 
+    # تحلیل پیام
+    analyze_group_message(user_message, user_id, username, chat_id, group_analysis_callback)
+
+    # ادامه پردازش عادی پیام
     group_history = context.bot_data.get("group_history", {}).get(chat_id, [])
     group_history.append({"user_id": user_id, "content": user_message, "message_id": message_id})
     context.bot_data["group_history"] = {chat_id: group_history}
@@ -2595,7 +2689,10 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     user_history = context.user_data.get("group_chat_history", [])
     
     should_reply = (
-        "ربات" in user_message or "پلاتو" in user_message or "سلام" in user_message or "خداحافظ" in user_message or
+        "ربات" in user_message.lower() or 
+        "پلاتو" in user_message.lower() or 
+        "سلام" in user_message.lower() or 
+        "خداحافظ" in user_message.lower() or
         (replied_message and replied_message.from_user.id == context.bot.id)
     )
     
@@ -2607,6 +2704,10 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     
     user_history.append({"role": "user", "content": user_message})
     context.user_data["group_chat_history"] = user_history
+    
+    # Get user's full name
+    user = update.effective_user
+    user_fullname = f"{user.first_name} {user.last_name if user.last_name else ''}".strip()
     
     # Prepare the system message with user information
     system_message = SYSTEM_MESSAGE
@@ -2628,16 +2729,39 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
             ai_response = clean_text(response.text.strip())
             user_history.append({"role": "assistant", "content": ai_response})
             context.user_data["group_chat_history"] = user_history
-            await update.message.reply_text(ai_response, message_thread_id=thread_id)
-        else:
+            
+            final_response = ai_response
+            for item in EXTRACTED_ITEMS:
+                if item["name"].lower() in user_message.lower():
+                    price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
+                    price_info = clean_text(f"{item['price']['value']} {price_type}")
+                    item_info = clean_text(
+                        f"مشخصات آیتم پیدا شد! 🎉\n"
+                        f"🔖 نام: {item['name']}\n"
+                        f"💸 قیمت: {price_info}\n"
+                        f"اگه می‌خوای مشخصات کامل‌تر با صدا رو ببینی، کافیه بگی: /i {item['name']} 😎"
+                    )
+                    final_response += f"\n\n{item_info}"
+                    break
+            
             await update.message.reply_text(
-                clean_text("مشکلی پیش اومد! 😅 بعداً دوباره امتحان کن 🚀"),
+                final_response,
+                reply_to_message_id=update.message.message_id,
+                message_thread_id=thread_id
+            )
+        else:
+            error_message = clean_text("اوفف، یه مشکلی پیش اومد! 😅 بعداً امتحان کن 🚀")
+            await update.message.reply_text(
+                error_message,
+                reply_to_message_id=update.message.message_id,
                 message_thread_id=thread_id
             )
     except Exception as e:
         logger.error(f"خطا در اتصال به API چت گروه: {e}")
+        error_message = clean_text("اییی، یه خطا خوردم! 😭 بعداً دوباره بیا 🚀")
         await update.message.reply_text(
-            clean_text("خطایی رخ داد! 😭 بعداً دوباره امتحان کن 🚀"),
+            error_message,
+            reply_to_message_id=update.message.message_id,
             message_thread_id=thread_id
         )
 
@@ -2715,123 +2839,197 @@ async def back_to_categories_group(update: Update, context: ContextTypes.DEFAULT
     return SELECT_CATEGORY
 
 async def main():
-    global application
-    max_retries = 3
-    retry_delay = 5
+    # ایجاد برنامه
+    application = Application.builder().token(TOKEN).build()
     
-    for attempt in range(max_retries):
+    # اضافه کردن هندلرها
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", start))
+    application.add_handler(CommandHandler("i", start_item_search))
+    application.add_handler(CommandHandler("p", start_group_image))
+    application.add_handler(CommandHandler("chat", chat_with_ai))
+    application.add_handler(CommandHandler("cancel", cancel))
+    application.add_handler(CommandHandler("admin", admin_start))
+    application.add_handler(CommandHandler("warn", warn))
+    application.add_handler(CommandHandler("violations", violations))
+    application.add_handler(CommandHandler("clear_violations", clear_violations_cmd))
+    
+    # اضافه کردن هندلرهای ادمین
+    application.add_handler(CommandHandler("add_admin", add_admin))
+    application.add_handler(CommandHandler("remove_admin", remove_admin))
+    application.add_handler(CommandHandler("list_admins", list_admins))
+    
+    # هندلرهای چت با هوش مصنوعی
+    ai_chat_handler = ConversationHandler(
+        entry_points=[CommandHandler("chat", chat_with_ai)],
+        states={
+            "chatting": [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_message)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+    application.add_handler(ai_chat_handler)
+    
+    # هندلرهای جستجوی آیتم
+    item_search_handler = ConversationHandler(
+        entry_points=[CommandHandler("i", start_item_search)],
+        states={
+            "searching": [MessageHandler(filters.TEXT & ~filters.COMMAND, search_by_name)],
+            "processing": [MessageHandler(filters.TEXT & ~filters.COMMAND, process_item_search)]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+    application.add_handler(item_search_handler)
+    
+    # هندلرهای تولید تصویر
+    image_generation_handler = ConversationHandler(
+        entry_points=[CommandHandler("p", start_group_image)],
+        states={
+            "getting_prompt": [MessageHandler(filters.TEXT & ~filters.COMMAND, get_prompt)],
+            "selecting_size": [CallbackQueryHandler(select_size, pattern="^size_")]
+        },
+        fallbacks=[CommandHandler("cancel", cancel)]
+    )
+    application.add_handler(image_generation_handler)
+    
+    # هندلرهای کال‌بک
+    application.add_handler(CallbackQueryHandler(handle_callback_query))
+    application.add_handler(CallbackQueryHandler(handle_inline_selection, pattern="^select_"))
+    application.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
+    application.add_handler(CallbackQueryHandler(back_to_categories_group, pattern="^back_to_categories_group$"))
+    application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^page_"))
+    application.add_handler(CallbackQueryHandler(select_category, pattern="^category_"))
+    application.add_handler(CallbackQueryHandler(select_item, pattern="^item_"))
+    application.add_handler(CallbackQueryHandler(back_to_items, pattern="^back_to_items$"))
+    application.add_handler(CallbackQueryHandler(select_group_item, pattern="^group_item_"))
+    application.add_handler(CallbackQueryHandler(process_item_in_group, pattern="^process_item_"))
+    application.add_handler(CallbackQueryHandler(retry_generate_image, pattern="^retry_image_"))
+    application.add_handler(CallbackQueryHandler(regenerate_group_image, pattern="^regenerate_image_"))
+    
+    # هندلرهای پیام
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_group_ai_message))
+    
+    # هندلرهای اینلاین
+    application.add_handler(InlineQueryHandler(inline_query))
+    
+    # هندلر خطا
+    application.add_error_handler(error_handler)
+    
+    # اضافه کردن جاب برای بررسی یادآوری‌ها
+    job_queue = application.job_queue
+    job_queue.run_repeating(check_reminders, interval=3600)  # هر ساعت یکبار
+    
+    # شروع برنامه
+    await application.initialize()
+    await application.start()
+    await application.run_polling()
+
+def analyze_group_message(text, user_id, username, chat_id, callback):
+    prompt = f"""
+    شما یک دستیار هوشمند برای مدیریت گروه‌های تلگرامی هستید. وظیفه شما تحلیل پیام‌ها و ارائه راهنمایی‌های مدیریتی است.
+    
+    پیام زیر را تحلیل کنید و موارد زیر را بررسی کنید:
+    1. آیا پیام حاوی لینک یا کلمات ممنوعه است؟
+    2. آیا پیام شامل زمان‌بندی یا یادآوری رویداد است؟
+    3. آیا پیام نیاز به گزارش به ادمین‌ها دارد؟
+    4. آیا کاربر نیاز به محدودیت (مثل سکوت موقت) دارد؟
+    5. آیا کاربر مستحق تشویق یا لقب خاصی است؟
+    
+    متن پیام: {text}
+    شناسه کاربر: {user_id}
+    نام کاربری: {username}
+    شناسه گروه: {chat_id}
+    
+    پاسخ شما باید به صورت JSON باشد با ساختار زیر:
+    {{
+        "violation": true/false,
+        "violation_type": "link/spam/inappropriate",
+        "needs_admin_report": true/false,
+        "report_reason": "دلیل گزارش",
+        "needs_mute": true/false,
+        "mute_duration": "مدت زمان سکوت",
+        "is_reminder": true/false,
+        "reminder_details": "جزئیات یادآوری",
+        "deserves_reward": true/false,
+        "suggested_title": "لقب پیشنهادی",
+        "reward_reason": "دلیل تشویق"
+    }}
+    """
+    analyze_message(prompt, model='openai', callback=callback)
+
+async def check_reminders(context: ContextTypes.DEFAULT_TYPE):
+    """بررسی و ارسال یادآوری‌های ثبت شده"""
+    current_time = datetime.now()
+    reminders = context.bot_data.get("reminders", [])
+    remaining_reminders = []
+    
+    for reminder in reminders:
         try:
-            application = Application.builder().token(TOKEN).read_timeout(60).write_timeout(60).connect_timeout(60).build()
-            
-            await application.initialize()
-            logger.info("Application با موفقیت مقداردهی شد.")
-            
-            if application.job_queue is None:
-                logger.error("JobQueue فعال نیست!")
-                raise RuntimeError("JobQueue فعال نیست!")
-            
-            await application.bot.set_webhook(url=WEBHOOK_URL)
-            logger.info(f"Webhook روی {WEBHOOK_URL} تنظیم شد.")
-            
-            schedule_scraping(application)
-            await extract_items()
-            
-            search_conv_handler = ConversationHandler(
-                entry_points=[CallbackQueryHandler(start_item_search, pattern="^search_items$")],
-                states={
-                    SELECT_CATEGORY: [
-                        CallbackQueryHandler(search_by_name, pattern="^search_by_name$"),
-                        CallbackQueryHandler(select_category, pattern="^select_category_"),
-                        CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_private_categories$")
-                    ],
-                    SEARCH_ITEM: [
-                        MessageHandler(filters.TEXT & ~filters.COMMAND, process_item_search),
-                        CallbackQueryHandler(select_item, pattern="^select_item_"),
-                        CallbackQueryHandler(back_to_items, pattern="^back_to_items$"),
-                        CallbackQueryHandler(handle_pagination, pattern="^(prev|next)_page_private$")
-                    ]
-                },
-                fallbacks=[
-                    CommandHandler("cancel", cancel),
-                    CommandHandler("start", start),
-                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
-                ],
-                name="item_search",
-                persistent=False
-            )
-
-            image_conv_handler = ConversationHandler(
-                entry_points=[
-                    CallbackQueryHandler(start_generate_image, pattern="^generate_image$"),
-                    CallbackQueryHandler(retry_generate_image, pattern="^retry_generate_image$")
-                ],
-                states={
-                    SELECT_SIZE: [CallbackQueryHandler(select_size, pattern="^size_")],
-                    GET_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_prompt)]
-                },
-                fallbacks=[
-                    CommandHandler("cancel", cancel),
-                    CommandHandler("start", start),
-                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
-                ],
-                name="image_generation",
-                persistent=False
-            )
-
-            group_image_conv_handler = ConversationHandler(
-                entry_points=[
-                    CommandHandler("p", start_group_image, filters=filters.ChatType.GROUPS),
-                    CallbackQueryHandler(regenerate_group_image, pattern="^regenerate_image_")
-                ],
-                states={},
-                fallbacks=[
-                    CommandHandler("cancel", cancel),
-                    CommandHandler("start", start)
-                ],
-                name="group_image_generation",
-                persistent=False
-            )
-
-            application.add_handler(CommandHandler("start", start))
-            application.add_handler(CommandHandler("cancel", cancel))
-            application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
-            application.add_handler(search_conv_handler)
-            application.add_handler(image_conv_handler)
-            application.add_handler(group_image_conv_handler)
-            application.add_handler(InlineQueryHandler(inline_query))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r'^@PlatoDex\s+\w+'), handle_inline_selection))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
-            application.add_handler(CommandHandler("item", process_item_in_group, filters=filters.ChatType.GROUPS))
-            application.add_handler(CommandHandler("i", process_item_in_group, filters=filters.ChatType.GROUPS))
-            application.add_handler(CommandHandler("w", show_leaderboard, filters=filters.ChatType.GROUPS))
-            application.add_handler(CallbackQueryHandler(select_group_item, pattern="^select_group_item_"))
-            
-            # Add these handlers for group interactions
-            application.add_handler(CallbackQueryHandler(select_category, pattern="^select_category_"))
-            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^prev_page_group"))
-            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^next_page_group"))
-            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^prev_page_private"))
-            application.add_handler(CallbackQueryHandler(handle_pagination, pattern="^next_page_private"))
-            application.add_handler(CallbackQueryHandler(back_to_categories_group, pattern="^back_to_categories_group$"))
-            
-            application.add_error_handler(error_handler)
-
-            port = int(os.getenv("PORT", 8000))
-            config = uvicorn.Config(app, host="0.0.0.0", port=port)
-            server = uvicorn.Server(config)
-            await server.serve()
-
-            return
-
-        except Exception as e:
-            logger.error(f"خطا در تلاش {attempt + 1}/{max_retries}: {e}")
-            if attempt < max_retries - 1:
-                logger.info(f"تلاش دوباره بعد از {retry_delay} ثانیه...")
-                await asyncio.sleep(retry_delay)
+            created_at = datetime.fromisoformat(reminder["created_at"])
+            # اگر 24 ساعت گذشته باشد، یادآوری را ارسال کن
+            if (current_time - created_at).total_seconds() >= 86400:  # 24 ساعت
+                chat_id = reminder["chat_id"]
+                user_id = reminder["user_id"]
+                details = reminder["details"]
+                
+                # ارسال یادآوری
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"⏰ یادآوری:\n{details}\n\nکاربر: {user_id}"
+                )
             else:
-                logger.error("همه تلاش‌ها برای شروع ربات ناموفق بود!")
-                raise
+                remaining_reminders.append(reminder)
+        except Exception as e:
+            logger.error(f"خطا در پردازش یادآوری: {e}")
+    
+    # به‌روزرسانی لیست یادآوری‌ها
+    context.bot_data["reminders"] = remaining_reminders
+
+async def add_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """اضافه کردن ادمین جدید"""
+    if not context.args:
+        await update.message.reply_text("لطفاً شناسه کاربری ادمین را وارد کنید.")
+        return
+    
+    try:
+        admin_id = int(context.args[0])
+        admins = context.bot_data.get("admins", [])
+        if admin_id not in admins:
+            admins.append(admin_id)
+            context.bot_data["admins"] = admins
+            await update.message.reply_text(f"ادمین با شناسه {admin_id} با موفقیت اضافه شد.")
+        else:
+            await update.message.reply_text("این کاربر قبلاً به عنوان ادمین ثبت شده است.")
+    except ValueError:
+        await update.message.reply_text("شناسه کاربری باید عدد باشد.")
+
+async def remove_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """حذف ادمین"""
+    if not context.args:
+        await update.message.reply_text("لطفاً شناسه کاربری ادمین را وارد کنید.")
+        return
+    
+    try:
+        admin_id = int(context.args[0])
+        admins = context.bot_data.get("admins", [])
+        if admin_id in admins:
+            admins.remove(admin_id)
+            context.bot_data["admins"] = admins
+            await update.message.reply_text(f"ادمین با شناسه {admin_id} با موفقیت حذف شد.")
+        else:
+            await update.message.reply_text("این کاربر در لیست ادمین‌ها وجود ندارد.")
+    except ValueError:
+        await update.message.reply_text("شناسه کاربری باید عدد باشد.")
+
+async def list_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """نمایش لیست ادمین‌ها"""
+    admins = context.bot_data.get("admins", [])
+    if not admins:
+        await update.message.reply_text("هیچ ادمینی ثبت نشده است.")
+        return
+    
+    admin_list = "\n".join([f"- {admin_id}" for admin_id in admins])
+    await update.message.reply_text(f"لیست ادمین‌ها:\n{admin_list}")
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # توکن و آدرس‌ها
 TOKEN = '7764880184:AAEAp5oyNfB__Cotdmtxb9BHnWgwydRN0ME'
 IMAGE_API_URL = 'https://pollinations.ai/prompt/'
-TEXT_API_URL = 'https://text.pollinations.ai/'
+TEXT_API_URL = 'https://text.pollinations.ai/generate'
 URL = "https://platopedia.com/items"
 BASE_IMAGE_URL = "https://profile.platocdn.com/"
 WEBHOOK_URL = "https://platodex.onrender.com/webhook"

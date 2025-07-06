@@ -563,7 +563,6 @@ async def main():
     application.add_handler(CommandHandler("violations", violations)) 
     application.add_handler(CommandHandler("clearviolations", clear_violations_cmd))
     application.add_handler(CommandHandler("admin", admin_start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     application.add_handler(CallbackQueryHandler(handle_callback_query, pattern="^(allow_|deny_).*$"))
 
     return application
@@ -2538,26 +2537,26 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_history.append({"role": "user", "content": user_message})
     context.user_data["chat_history"] = chat_history
     
+    # Updated payload structure for Pollinations API
     payload = {
-        "messages": [
-            {"role": "system", "content": system_message}
-        ] + chat_history,
+        "prompt": f"{system_message}\n\nUser: {user_message}\n\nAssistant:",
         "model": "openai-large",
-        "seed": 42,
-        "jsonMode": False
+        "max_tokens": 500,
+        "temperature": 0.7
     }
     
     keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     try:
-        response = requests.post(TEXT_API_URL, json=payload, timeout=20)
+        response = requests.post(TEXT_API_URL, json=payload, timeout=30)
         if response.status_code == 200:
             ai_response = clean_text(response.text.strip())
             chat_history.append({"role": "assistant", "content": ai_response})
             context.user_data["chat_history"] = chat_history
             await update.message.reply_text(ai_response, reply_markup=reply_markup)
         else:
+            logger.error(f"API Error: {response.status_code} - {response.text}")
             await update.message.reply_text(
                 clean_text("اوفف، یه مشکلی پیش اومد! 😅 فکر کنم API یه کم خوابش برده! بعداً امتحان کن 🚀"),
                 reply_markup=reply_markup
@@ -2614,23 +2613,23 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     if user_fullname:
         system_message = f"نام و نام خانوادگی کاربر: {user_fullname}\n" + SYSTEM_MESSAGE + "\nلطفا در پاسخ‌های خود از نام کاربر استفاده کنید و اگر نام انگلیسی است به فارسی تبدیل کنید."
     
+    # Updated payload structure for Pollinations API
     payload = {
-        "messages": [
-            {"role": "system", "content": system_message}
-        ] + user_history,
+        "prompt": f"{system_message}\n\nUser: {user_message}\n\nAssistant:",
         "model": "openai-large",
-        "seed": 42,
-        "jsonMode": False
+        "max_tokens": 500,
+        "temperature": 0.7
     }
     
     try:
-        response = requests.post(TEXT_API_URL, json=payload, timeout=20)
+        response = requests.post(TEXT_API_URL, json=payload, timeout=30)
         if response.status_code == 200:
             ai_response = clean_text(response.text.strip())
             user_history.append({"role": "assistant", "content": ai_response})
             context.user_data["group_chat_history"] = user_history
             await update.message.reply_text(ai_response, message_thread_id=thread_id)
         else:
+            logger.error(f"API Error: {response.status_code} - {response.text}")
             await update.message.reply_text(
                 clean_text("مشکلی پیش اومد! 😅 بعداً دوباره امتحان کن 🚀"),
                 message_thread_id=thread_id
@@ -2803,6 +2802,8 @@ async def main():
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r'^@PlatoDex\s+\w+'), handle_inline_selection))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
+            # Add group message handler for general group messages (not AI chat)
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_message))
             application.add_handler(CommandHandler("item", process_item_in_group, filters=filters.ChatType.GROUPS))
             application.add_handler(CommandHandler("i", process_item_in_group, filters=filters.ChatType.GROUPS))
             application.add_handler(CommandHandler("w", show_leaderboard, filters=filters.ChatType.GROUPS))

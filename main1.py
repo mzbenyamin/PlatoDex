@@ -2561,11 +2561,7 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "temperature": 0.7
     }
     
-    keyboard = [
-        [InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")],
-        [InlineKeyboardButton("🗑️ Clear History", callback_data="clear_chat_history")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = None
     
     try:
         response = requests.post(TEXT_API_URL, json=payload, timeout=30)
@@ -2627,9 +2623,6 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     user_history.append({"role": "user", "content": user_message})
     context.user_data["group_chat_history"] = user_history
     
-    # محدود کردن تاریخچه به 10 پیام آخر
-    recent_history = user_history[-10:] if len(user_history) > 10 else user_history
-    
     # Prepare the system message with user information
     system_message = SYSTEM_MESSAGE
     if user_fullname:
@@ -2639,7 +2632,7 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     payload = {
         "messages": [
             {"role": "system", "content": system_message}
-        ] + recent_history,  # اضافه کردن تاریخچه محدود شده
+        ] + user_history,  # اضافه کردن کل تاریخچه (نامحدود)
         "model": "openai",
         "max_tokens": 500,
         "temperature": 0.7
@@ -2665,16 +2658,7 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
             message_thread_id=thread_id
         )
 
-async def clear_chat_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    # پاک کردن تاریخچه چت
-    context.user_data["chat_history"] = []
-    context.user_data["group_chat_history"] = []
-    
-    await query.edit_message_text(clean_text("🗑️ تاریخچه چت پاک شد! 😊 حالا می‌تونی دوباره شروع کنی!"))
-    return ConversationHandler.END
+
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -2830,7 +2814,7 @@ async def main():
             application.add_handler(CommandHandler("start", start))
             application.add_handler(CommandHandler("cancel", cancel))
             application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
-            application.add_handler(CallbackQueryHandler(clear_chat_history, pattern="^clear_chat_history$"))
+
             application.add_handler(search_conv_handler)
             application.add_handler(image_conv_handler)
             application.add_handler(group_image_conv_handler)

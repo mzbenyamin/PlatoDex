@@ -247,7 +247,7 @@ def process_api_queue():
             
             payload = {
                 "messages": [{"role": "user", "content": text}],
-                "model": "openai",
+                "model": "openai-large",
                 "max_tokens": 500,
                 "temperature": 0.7
             }
@@ -2554,7 +2554,7 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             {"role": "system", "content": system_message},
             {"role": "user", "content": user_message}
         ],
-        "model": "openai",
+        "model": "openai-large",
         "max_tokens": 500,
         "temperature": 0.7
     }
@@ -2633,7 +2633,7 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
             {"role": "system", "content": system_message},
             {"role": "user", "content": user_message}
         ],
-        "model": "openai",
+        "model": "openai-large",
         "max_tokens": 500,
         "temperature": 0.7
     }

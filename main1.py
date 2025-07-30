@@ -247,7 +247,7 @@ def process_api_queue():
             
             payload = {
                 "messages": [{"role": "user", "content": text}],
-                "model": "openai-large",
+                "model": "openai
                 "max_tokens": 500,
                 "temperature": 0.7
             }
@@ -2548,18 +2548,23 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_history.append({"role": "user", "content": user_message})
     context.user_data["chat_history"] = chat_history
     
+    # محدود کردن تاریخچه به 10 پیام آخر
+    recent_history = chat_history[-10:] if len(chat_history) > 10 else chat_history
+    
     # Updated payload structure for Pollinations API
     payload = {
         "messages": [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": user_message}
-        ],
-        "model": "openai-large",
+            {"role": "system", "content": system_message}
+        ] + recent_history,  # اضافه کردن تاریخچه محدود شده
+        "model": "openai",
         "max_tokens": 500,
         "temperature": 0.7
     }
     
-    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+    keyboard = [
+        [InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")],
+        [InlineKeyboardButton("🗑️ Clear History", callback_data="clear_chat_history")]
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     try:
@@ -2622,6 +2627,9 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     user_history.append({"role": "user", "content": user_message})
     context.user_data["group_chat_history"] = user_history
     
+    # محدود کردن تاریخچه به 10 پیام آخر
+    recent_history = user_history[-10:] if len(user_history) > 10 else user_history
+    
     # Prepare the system message with user information
     system_message = SYSTEM_MESSAGE
     if user_fullname:
@@ -2630,10 +2638,9 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     # Updated payload structure for Pollinations API
     payload = {
         "messages": [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": user_message}
-        ],
-        "model": "openai-large",
+            {"role": "system", "content": system_message}
+        ] + recent_history,  # اضافه کردن تاریخچه محدود شده
+        "model": "openai",
         "max_tokens": 500,
         "temperature": 0.7
     }
@@ -2657,6 +2664,17 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
             clean_text("خطایی رخ داد! 😭 بعداً دوباره امتحان کن 🚀"),
             message_thread_id=thread_id
         )
+
+async def clear_chat_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    
+    # پاک کردن تاریخچه چت
+    context.user_data["chat_history"] = []
+    context.user_data["group_chat_history"] = []
+    
+    await query.edit_message_text(clean_text("🗑️ تاریخچه چت پاک شد! 😊 حالا می‌تونی دوباره شروع کنی!"))
+    return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -2812,11 +2830,14 @@ async def main():
             application.add_handler(CommandHandler("start", start))
             application.add_handler(CommandHandler("cancel", cancel))
             application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
+            application.add_handler(CallbackQueryHandler(clear_chat_history, pattern="^clear_chat_history$"))
             application.add_handler(search_conv_handler)
             application.add_handler(image_conv_handler)
             application.add_handler(group_image_conv_handler)
             application.add_handler(InlineQueryHandler(inline_query))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r'^@PlatoDex\s+\w+'), handle_inline_selection))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_message))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
             # Add group message handler for general group messages (not AI chat)

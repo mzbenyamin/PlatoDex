@@ -2611,10 +2611,20 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     
     should_reply = (
         "ربات" in user_message or "پلاتو" in user_message or "سلام" in user_message or "خداحافظ" in user_message or
+        "bot" in user_message or "hello" in user_message or "hi" in user_message or "bye" in user_message or
+        "plato" in user_message or "پلاتودکس" in user_message or "@plato" in user_message or
         (replied_message and replied_message.from_user.id == context.bot.id)
     )
     
+    logger.info(f"Group message: '{user_message}' - should_reply: {should_reply}")
+    
+    # تست ساده برای بررسی عملکرد
+    if "تست" in user_message:
+        await update.message.reply_text("✅ ربات در گروه کار می‌کند!")
+        return
+    
     if not should_reply:
+        logger.info(f"Not replying to message: '{user_message}'")
         return
     
     if replied_message and replied_message.from_user.id == context.bot.id:
@@ -2820,10 +2830,8 @@ async def main():
             application.add_handler(group_image_conv_handler)
             application.add_handler(InlineQueryHandler(inline_query))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r'^@PlatoDex\s+\w+'), handle_inline_selection))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_ai_message))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
             # Add group message handler for general group messages (not AI chat)
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_message))
             application.add_handler(CommandHandler("item", process_item_in_group, filters=filters.ChatType.GROUPS))

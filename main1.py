@@ -247,7 +247,7 @@ def process_api_queue():
             
             payload = {
                 "messages": [{"role": "user", "content": text}],
-                "model": "openai
+                "model": "openai",
                 "max_tokens": 500,
                 "temperature": 0.7
             }

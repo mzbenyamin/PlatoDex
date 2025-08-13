@@ -37,7 +37,7 @@ WEBHOOK_URL = "https://platodex.onrender.com/webhook"
 POLLINATIONS_TOKEN = 'JIWPb6Eu2E5415Sa'
 
 # مدل ChatGPT برای استفاده
-GPT_MODEL = "gpt-5-nano"  # مدل GPT-5 Nano پیشرفته
+GPT_MODEL = "openai-large"
 MAX_TOKENS = 1000
 TEMPERATURE = 0.7
 

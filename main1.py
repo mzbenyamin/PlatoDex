@@ -37,7 +37,7 @@ WEBHOOK_URL = "https://platodex.onrender.com/webhook"
 POLLINATIONS_TOKEN = 'JIWPb6Eu2E5415Sa'
 
 # مدل ChatGPT برای استفاده
-GPT_MODEL = "gpt-4-turbo-preview"  # مدل GPT-4 پیشرفته
+GPT_MODEL = "gpt-5-nano"  # مدل GPT-5 Nano پیشرفته
 MAX_TOKENS = 1000
 TEMPERATURE = 0.7
 
@@ -137,114 +137,7 @@ SYSTEM_MESSAGE = (
     "آیدی تلگرامی مدیر سلاطین پلاتو: @BeniHFX ایدی پلاتویی: Salatin"
 )
 
-# --- مدیریت گروه و دیتابیس ---
-ADMIN_ID = 7403352779  # Admin user ID
 
-def init_db():
-    conn = sqlite3.connect('violations.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS violations (
-            user_id TEXT,
-            username TEXT,
-            message TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS chat_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            chat_id TEXT,
-            user_id TEXT,
-            username TEXT,
-            message TEXT,
-            reply_to_message_id TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('response_triggers', ''))
-    cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('no_response_triggers', ''))
-    cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('violation_triggers', ''))
-    cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('no_violation_triggers', ''))
-    conn.commit()
-    conn.close()
-    logger.info("Database initialized")
-
-def get_setting(key, default=''):
-    conn = sqlite3.connect('violations.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT value FROM settings WHERE key = ?', (key,))
-    result = cursor.fetchone()
-    conn.close()
-    return result[0] if result else default
-
-def update_setting(key, value):
-    conn = sqlite3.connect('violations.db')
-    cursor = conn.cursor()
-    cursor.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, value))
-    conn.commit()
-    conn.close()
-    logger.info(f"Setting updated: {key} = {value}")
-
-def count_violations(user_id):
-    conn = sqlite3.connect('violations.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM violations WHERE user_id = ?', (user_id,))
-    count = cursor.fetchone()[0]
-    conn.close()
-    return count
-
-def log_violation(user_id, username, message):
-    conn = sqlite3.connect('violations.db')
-    cursor = conn.cursor()
-    cursor.execute('INSERT INTO violations (user_id, username, message) VALUES (?, ?, ?)',
-                   (user_id, username, message))
-    conn.commit()
-    conn.close()
-    logger.info(f"Violation logged for user {user_id} ({username}): {message}")
-
-def clear_violations(user_id):
-    conn = sqlite3.connect('violations.db')
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM violations WHERE user_id = ?', (user_id,))
-    conn.commit()
-    conn.close()
-    logger.info(f"Violations cleared for user {user_id}")
-
-def add_to_chat_history(chat_id, user_id, username, message, reply_to_message_id=None):
-    conn = sqlite3.connect('violations.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM chat_history')
-    count = cursor.fetchone()[0]
-    if count >= 1000:
-        cursor.execute('DELETE FROM chat_history WHERE id = (SELECT MIN(id) FROM chat_history)')
-    cursor.execute('''
-        INSERT INTO chat_history (chat_id, user_id, username, message, reply_to_message_id)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (chat_id, user_id, username, message, reply_to_message_id))
-    conn.commit()
-    conn.close()
-    logger.info(f"Message added to chat history for user {user_id} (@{username})")
-
-def get_recent_chat_history(chat_id, limit=10):
-    conn = sqlite3.connect('violations.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT user_id, username, message, reply_to_message_id, timestamp
-        FROM chat_history
-        WHERE chat_id = ?
-        ORDER BY timestamp DESC
-        LIMIT ?
-    ''', (chat_id, limit))
-    history = cursor.fetchall()
-    conn.close()
-    return history
 
 # --- صف API ---
 api_queue = queue.Queue()
@@ -302,32 +195,9 @@ threading.Thread(target=process_api_queue, daemon=True).start()
 def analyze_message(text, model='openai', callback=lambda x: None):
     api_queue.put((text, model, callback))
 
-def should_respond_or_violate(text, bot_username, user_id, username, callback):
-    response_triggers = get_setting('response_triggers', '')
-    no_response_triggers = get_setting('no_response_triggers', '')
-    violation_triggers = get_setting('violation_triggers', '')
-    no_violation_triggers = get_setting('no_violation_triggers', '')
-    logger.info(f"Analyzing message from {user_id} (@{username}): {text}")
-    prompt = f"""
-    شما یک دستیار هوشمند در گروه‌های تلگرامی هستید که به مدیریت گروه کمک می‌کنید و به سوالات کاربران پاسخ می‌دهید.
-    پیام زیر را تحلیل کنید و تصمیم بگیرید:
-    1. اگر پیام شامل کلمات کلیدی یا الگوهای زیر باشد: {response_triggers}، یا مستقیماً خطاب به ربات باشد (مثلاً با منشن یا در چت خصوصی)، پاسخ دهید.
-    2. اگر پیام شامل کلمات کلیدی زیر باشد: {no_response_triggers}، پاسخ ندهید.
-    3. اگر پیام شامل کلمات کلیدی یا الگوهای زیر باشد: {violation_triggers}، آن را به عنوان تخلف علامت‌گذاری کنید.
-    4. اگر پیام شامل کلمات کلیدی زیر باشد: {no_violation_triggers}، آن را به عنوان تخلف علامت‌گذاری نکنید.
-    همچنین، اگر پیام یک سوال مهم است که نیاز به پاسخ دارد، اما مطمئن نیستید که باید پاسخ دهید، از کاربر اجازه بگیرید.
-    متن پیام: {text}
-    پاسخ شما باید یکی از موارد زیر باشد:
-    - 'پاسخ بده': اگر باید مستقیماً پاسخ دهید
-    - 'اجازه بگیر': اگر باید از کاربر اجازه بگیرید
-    - 'تخلف': اگر پیام تخلف است
-    - 'هیچی': اگر هیچ کدام از موارد بالا صدق نمی‌کند
-    """
-    analyze_message(prompt, model='openai', callback=callback)
+
 
 def generate_response(text, user_id, username, callback, chat_history=None):
-    response_triggers = get_setting('response_triggers', '')
-    
     # Get user's full name if available
     user_fullname = None
     if chat_history and len(chat_history) > 0:
@@ -359,7 +229,7 @@ def generate_response(text, user_id, username, callback, chat_history=None):
     - پاسخ باید کوتاه، دقیق و جذاب باشد
     - از ایموجی‌های مناسب استفاده کن
     - با لحن نسل Z و دوستانه صحبت کن
-    - اگر سوال مرتبط با کلمات کلیدی ({response_triggers}) باشد، پاسخ مرتبط بده
+    - اگر سوال مرتبط با کلمات کلیدی باشد، پاسخ مرتبط بده
     - اگر نیاز است، هشدار دهید که برای اطلاعات دقیق‌تر با متخصص مشورت کنند
     - اگر سوالی است که نیاز به اجازه کاربر دارد، از او اجازه بگیرید
     - اگر سوال در مورد آیتم‌های پلاتو است، راهنمایی کن که از دستور /i استفاده کنند
@@ -373,22 +243,7 @@ def generate_response(text, user_id, username, callback, chat_history=None):
     """
     analyze_message(prompt, model='openai', callback=callback)
 
-def generate_violation_reason(text, callback):
-    prompt = f"""
-    شما یک دستیار هوشمند در گروه‌های تلگرامی هستید که به مدیریت گروه کمک می‌کنید.
-    پیام زیر را تحلیل کنید و دلیل دقیق تخلف را توضیح دهید:
-    - دلیل باید واضح و حرفه‌ای باشد
-    - حداکثر 50 کلمه باشد
-    - از کلمات توهین‌آمیز استفاده نکنید
-    - دلیل باید به صورت مستقیم و بدون ابهام باشد
-    متن پیام: {text}
-    مثال:
-    پیام: "سلام به همه"
-    دلیل: پیام خالی یا بی‌محتوا
-    پیام: "لینک دانلود فیلم"
-    دلیل: ارسال لینک غیرمجاز و تبلیغات
-    """
-    analyze_message(prompt, model='openai', callback=callback)
+
 
 # --- دستورات ادمین و هندلرهای مدیریتی ---
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove
@@ -473,10 +328,8 @@ async def warn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not target_user_id:
         await update.message.reply_text("کاربر پیدا نشد.", parse_mode='HTML')
         return
-    log_violation(target_user_id, target_username, "اخطار دستی توسط ادمین")
-    violation_count = count_violations(target_user_id)
     await update.message.reply_text(
-        f"<b>⚠️ تخلف و اخطار</b>\n\nکاربر <a href='tg://user?id={target_user_id}'>@{target_username}</a> شما یک خطا دریافت کردید\n\n<b>📇 علت:</b> اخطار دستی\n\n<b>❗️اخطارهای شما:</b> {violation_count}",
+        f"<b>⚠️ اخطار</b>\n\nکاربر <a href='tg://user?id={target_user_id}'>@{target_username}</a> شما یک اخطار دریافت کردید\n\n<b>📇 علت:</b> اخطار دستی",
         parse_mode='HTML'
     )
 
@@ -516,7 +369,6 @@ async def clear_violations_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
     if not target_user_id:
         await update.message.reply_text("کاربر پیدا نشد.", parse_mode='HTML')
         return
-    clear_violations(target_user_id)
     await update.message.reply_text(
         f"تخلف‌های <a href='tg://user?id={target_user_id}'>@{target_username}</a> پاک شد.",
         parse_mode='HTML'
@@ -578,26 +430,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ),
                     0
                 )
-            elif 'تخلف' in decision:
-                log_violation(str(user_id), username, message_text)
-                violation_count = count_violations(str(user_id))
-                def violation_reason_callback(reason):
-                    if not reason:
-                        reason = "محتوای غیرمجاز یا تخلف از قوانین"
-                    context.job_queue.run_once(
-                        lambda ctx: ctx.bot.send_message(
-                            chat_id=chat_id,
-                            text=f"⚠️ <b>اخطار</b>\n\n"
-                                 f"{update.message.from_user.mention_html()} شما یک اخطار دریافت کردید\n\n"
-                                 f"📇 <b>علت:</b> {reason}\n\n"
-                                 f"❗️<b>تعداد اخطارهای شما:</b> {violation_count}",
-                            parse_mode='HTML',
-                            reply_to_message_id=message_id
-                        ),
-                        0
-                    )
-                generate_violation_reason(message_text, violation_reason_callback)
-        should_respond_or_violate(message_text, bot_username, user_id, username, callback)
+
 
 # --- هندلر CallbackQuery برای اجازه پاسخ ---
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -620,9 +453,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     )
             generate_response(message.text, user_id, message.from_user.username or "Unknown", reply_callback)
     await query.message.delete()
-# --- فراخوانی init_db و افزودن هندلرها در main ---
+# --- تابع main اصلی ---
 async def main():
-    init_db()
     application = Application.builder().token(TOKEN).build()
     
     # Add handlers

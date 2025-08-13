@@ -32,6 +32,15 @@ TEXT_API_URL = 'https://text.pollinations.ai/'
 URL = "https://platopedia.com/items"
 BASE_IMAGE_URL = "https://profile.platocdn.com/"
 WEBHOOK_URL = "https://platodex.onrender.com/webhook"
+
+# توکن Pollinations برای دسترسی به مدل‌های پیشرفته
+POLLINATIONS_TOKEN = 'JIWPb6Eu2E5415Sa'
+
+# مدل ChatGPT برای استفاده
+GPT_MODEL = "gpt-4-turbo-preview"  # مدل GPT-4 پیشرفته
+MAX_TOKENS = 1000
+TEMPERATURE = 0.7
+
 EXTRACTED_ITEMS = []
 AI_CHAT_USERS = set()
 SEARCH_ITEM, SELECT_CATEGORY = range(2)
@@ -247,14 +256,20 @@ def process_api_queue():
             
             payload = {
                 "messages": [{"role": "user", "content": text}],
-                "model": "openai",
-                "max_tokens": 500,
-                "temperature": 0.7
+                "model": GPT_MODEL,
+                "max_tokens": MAX_TOKENS,
+                "temperature": TEMPERATURE
+            }
+            
+            # اضافه کردن توکن در headers
+            headers = {
+                "Authorization": f"Bearer {POLLINATIONS_TOKEN}",
+                "Content-Type": "application/json"
             }
             
             for attempt in range(3):
                 try:
-                    response = requests.post(TEXT_API_URL, json=payload, timeout=30)
+                    response = requests.post(TEXT_API_URL, json=payload, headers=headers, timeout=30)
                     response.raise_for_status()
                     logger.info(f"API response: {response.text[:50]}...")
                     callback(response.text.strip())
@@ -384,8 +399,9 @@ async def admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type == 'private' and user_id == ADMIN_ID:
         keyboard = [
             ['تنظیم پاسخ‌ها', 'تنظیم تخلف‌ها'],
+            ['تست API', 'وضعیت ربات'],
             ['تنظیم عدم پاسخ', 'تنظیم عدم تخلف'],
-            ['وضعیت ربات', 'خروج']
+            ['خروج']
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
         await update.message.reply_text(
@@ -398,6 +414,46 @@ async def admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "<b>سلام!</b> من ربات گروه هستم. برای سوال، من رو منشن کنید یا توی چت خصوصی پیام بدید.",
             parse_mode='HTML'
         )
+
+async def test_api(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    if update.message.chat.type == 'private' and user_id == ADMIN_ID:
+        await update.message.reply_text("🔄 در حال تست API...")
+        
+        try:
+            # تست ساده API
+            test_payload = {
+                "messages": [{"role": "user", "content": "سلام، این یک تست است"}],
+                "model": GPT_MODEL,
+                "max_tokens": 100,
+                "temperature": 0.7
+            }
+            
+            headers = {
+                "Authorization": f"Bearer {POLLINATIONS_TOKEN}",
+                "Content-Type": "application/json"
+            }
+            
+            response = requests.post(TEXT_API_URL, json=test_payload, headers=headers, timeout=30)
+            
+            if response.status_code == 200:
+                await update.message.reply_text(
+                    f"✅ API با موفقیت کار می‌کند!\n\n"
+                    f"مدل: {GPT_MODEL}\n"
+                    f"توکن: {POLLINATIONS_TOKEN[:8]}...\n"
+                    f"پاسخ: {response.text[:100]}..."
+                )
+            else:
+                await update.message.reply_text(
+                    f"❌ خطا در API!\n\n"
+                    f"کد خطا: {response.status_code}\n"
+                    f"پیام: {response.text}"
+                )
+                
+        except Exception as e:
+            await update.message.reply_text(f"❌ خطا در تست API: {str(e)}")
+    else:
+        await update.message.reply_text("شما دسترسی ادمین ندارید.")
 
 async def warn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -574,6 +630,7 @@ async def main():
     application.add_handler(CommandHandler("violations", violations)) 
     application.add_handler(CommandHandler("clearviolations", clear_violations_cmd))
     application.add_handler(CommandHandler("admin", admin_start))
+    application.add_handler(CommandHandler("test_api", test_api))
     application.add_handler(CallbackQueryHandler(handle_callback_query, pattern="^(allow_|deny_).*$"))
 
     return application

@@ -147,22 +147,22 @@ def process_api_queue():
             text, model, callback = api_queue.get()
             logger.info(f"Processing API request: {text[:50]}...")
             
+            # ساخت URL با پارامترهای model و token
+            api_url = f"{TEXT_API_URL}?model={GPT_MODEL}&token={POLLINATIONS_TOKEN}"
+            
             payload = {
                 "messages": [{"role": "user", "content": text}],
-                "model": GPT_MODEL,
                 "max_tokens": MAX_TOKENS,
                 "temperature": TEMPERATURE
             }
             
-            # اضافه کردن توکن در headers
             headers = {
-                "Authorization": f"Bearer {POLLINATIONS_TOKEN}",
                 "Content-Type": "application/json"
             }
             
             for attempt in range(3):
                 try:
-                    response = requests.post(TEXT_API_URL, json=payload, headers=headers, timeout=30)
+                    response = requests.post(api_url, json=payload, headers=headers, timeout=30)
                     response.raise_for_status()
                     logger.info(f"API response: {response.text[:50]}...")
                     callback(response.text.strip())
@@ -277,19 +277,20 @@ async def test_api(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         try:
             # تست ساده API
+            # ساخت URL با پارامترهای model و token
+            api_url = f"{TEXT_API_URL}?model={GPT_MODEL}&token={POLLINATIONS_TOKEN}"
+            
             test_payload = {
                 "messages": [{"role": "user", "content": "سلام، این یک تست است"}],
-                "model": GPT_MODEL,
                 "max_tokens": 100,
                 "temperature": 0.7
             }
             
             headers = {
-                "Authorization": f"Bearer {POLLINATIONS_TOKEN}",
                 "Content-Type": "application/json"
             }
             
-            response = requests.post(TEXT_API_URL, json=test_payload, headers=headers, timeout=30)
+            response = requests.post(api_url, json=test_payload, headers=headers, timeout=30)
             
             if response.status_code == 200:
                 await update.message.reply_text(
@@ -2452,8 +2453,11 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     reply_markup = None
     
+    # ساخت URL با پارامترهای model و token
+    api_url = f"{TEXT_API_URL}?model={GPT_MODEL}&token={POLLINATIONS_TOKEN}"
+    
     try:
-        response = requests.post(TEXT_API_URL, json=payload, timeout=30)
+        response = requests.post(api_url, json=payload, timeout=30)
         if response.status_code == 200:
             ai_response = clean_text(response.text.strip())
             chat_history.append({"role": "assistant", "content": ai_response})
@@ -2537,8 +2541,11 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
         "temperature": 0.7
     }
     
+    # ساخت URL با پارامترهای model و token
+    api_url = f"{TEXT_API_URL}?model={GPT_MODEL}&token={POLLINATIONS_TOKEN}"
+    
     try:
-        response = requests.post(TEXT_API_URL, json=payload, timeout=30)
+        response = requests.post(api_url, json=payload, timeout=30)
         if response.status_code == 200:
             ai_response = clean_text(response.text.strip())
             user_history.append({"role": "assistant", "content": ai_response})

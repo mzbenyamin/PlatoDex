@@ -434,8 +434,7 @@ def generate_response(text, user_id, username, callback, chat_history=None):
     user_info = f"نام و نام کاربری کاربر: @{username}" if not user_fullname else f"نام و نام کاربری کاربر: {user_fullname} (@{username})"
     
     prompt = f"""
-    شما دستیار هوشمند گروه سلاطین پلاتو هستید و به سبک نسل الفا صحبت میکنید و خیلی خودمونی حرف میزنید.
-    
+    شما دستیار هوشمند گروه سلاطین پلاتو هستید و به سبک نسل الفا صحبت میکنید و خیلی خودمونی حرف میزنید
     {user_info}
     متن و یا سوال و جواب کاربر: {text}
     تاریخچه پیام کاربران :{history_context}

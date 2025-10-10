@@ -27,20 +27,12 @@ logger = logging.getLogger(__name__)
 
 # توکن و آدرس‌ها
 TOKEN = '7764880184:AAEAp5oyNfB__Cotdmtxb9BHnWgwydRN0ME'
-IMAGE_API_URL = 'https://pollinations.ai/prompt/'
-TEXT_API_URL = 'https://text.pollinations.ai/'
+GROQ_API_KEY = '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'  # اینجا API key Groq رو وارد کن
+IMAGE_API_URL = 'https://pollinations.ai/prompt/'  # تصویر همچنان از Pollinations
+GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions'  # API جدید Groq
 URL = "https://platopedia.com/items"
 BASE_IMAGE_URL = "https://profile.platocdn.com/"
 WEBHOOK_URL = "https://platodex.onrender.com/webhook"
-
-# توکن Pollinations برای دسترسی به مدل‌های پیشرفته
-POLLINATIONS_TOKEN = 'JIWPb6Eu2E5415Sa'
-
-# مدل ChatGPT برای استفاده
-GPT_MODEL = "openai-large"
-MAX_TOKENS = 1000
-TEMPERATURE = 0.7
-
 EXTRACTED_ITEMS = []
 AI_CHAT_USERS = set()
 SEARCH_ITEM, SELECT_CATEGORY = range(2)
@@ -61,7 +53,7 @@ def generate_safe_callback_data(prompt):
 
 SYSTEM_MESSAGE = (
     "شما دستیار هوشمند PlatoDex هستید و درمورد پلاتو به کاربران کمک میکنید با ایموجی "
-    "شما به مشخصات آیتم ها دسترسی دارید و به صورت نسل z با کاریر صحبت میکنید و خیلی دوستانه و خودمونی با کاربر شوخی کن و کوتاه بهش پاسخ بده"
+    "حرف میزنی به صورت حکیمانه و انگار ۶۰ سال ست داری صحبت میکنی و فوق العاده خنده دار و طنز حرف میزنی و شوخی کن\\. به مشخصات آیتم‌های پلاتو دسترسی داری و می‌تونی "
     "به سوالات کاربر در مورد آیتم‌ها جواب بدی و راهنمایی کنی چطور با دستور /i مشخصات کامل رو بگیرن\\. "
     "حذف اکانت\n"
     "چطور اکانتمو حذف کنم؟\nبرای حذف اکانت این مراحل رو برو:\n"
@@ -134,6 +126,230 @@ SYSTEM_MESSAGE = (
     "خلاصه به سوالات جواب بده خیلی بلند نباشه اگر کاربر درخواست توضیحات کرد بعد توضیح بده"
     "با پلاتو ویپ یا vip و پلاتو مگ یا mage میشه چندین اکانت ساخت و سکه جمع آوری کرد و برای کسایی هست که میخوان چند اکانت داشته باشند سکه جمع اوری کنند برای خودشون"
     "پلاتو مگ و ویپ چیکار میکنن؟ پلاتو نسخه اصلی قابلیت کلون شدن رو نداره افراد با این اپ ها میتونن چندین اکانت با این اپ ها بسازند و سکه روزانه را ذخیره و یا برای خودشون ایتم بخرند یا بفروشند فرق مگ و ویپ در این هست. افرادی که قبلا نسخه های قبلی مگ و ویپ داشتند میتونن با اپ های بالا که در کانال آپلود شده اپدیت کنن و به سکه های قفل شده در نسخه قبلی دسترسی‌ داشته باشند"
+    "آیدی تلگرامی مدیر سلاطین پلاتو: @BeniHFX ایدی پلاتویی: Salatin"
+)
+
+# --- مدیریت گروه و دیتابیس ---
+ADMIN_ID = 7403352779  # Admin user ID
+
+def init_db():
+    conn = sqlite3.connect('violations.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS violations (
+            user_id TEXT,
+            username TEXT,
+            message TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS chat_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id TEXT,
+            user_id TEXT,
+            username TEXT,
+            message TEXT,
+            reply_to_message_id TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('response_triggers', ''))
+    cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('no_response_triggers', ''))
+    cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('violation_triggers', ''))
+    cursor.execute('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', ('no_violation_triggers', ''))
+    conn.commit()
+    conn.close()
+    logger.info("Database initialized")
+
+def get_setting(key, default=''):
+    conn = sqlite3.connect('violations.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT value FROM settings WHERE key = ?', (key,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else default
+
+def update_setting(key, value):
+    conn = sqlite3.connect('violations.db')
+    cursor = conn.cursor()
+    cursor.execute('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', (key, value))
+    conn.commit()
+    conn.close()
+    logger.info(f"Setting updated: {key} = {value}")
+
+def count_violations(user_id):
+    conn = sqlite3.connect('violations.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM violations WHERE user_id = ?', (user_id,))
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
+
+def log_violation(user_id, username, message):
+    conn = sqlite3.connect('violations.db')
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO violations (user_id, username, message) VALUES (?, ?, ?)',
+                   (user_id, username, message))
+    conn.commit()
+    conn.close()
+    logger.info(f"Violation logged for user {user_id} ({username}): {message}")
+
+def clear_violations(user_id):
+    conn = sqlite3.connect('violations.db')
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM violations WHERE user_id = ?', (user_id,))
+    conn.commit()
+    conn.close()
+    logger.info(f"Violations cleared for user {user_id}")
+
+def add_to_chat_history(chat_id, user_id, username, message, reply_to_message_id=None):
+    conn = sqlite3.connect('violations.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT COUNT(*) FROM chat_history')
+    count = cursor.fetchone()[0]
+    if count >= 1000:
+        cursor.execute('DELETE FROM chat_history WHERE id = (SELECT MIN(id) FROM chat_history)')
+    cursor.execute('''
+        INSERT INTO chat_history (chat_id, user_id, username, message, reply_to_message_id)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (chat_id, user_id, username, message, reply_to_message_id))
+    conn.commit()
+    conn.close()
+    logger.info(f"Message added to chat history for user {user_id} (@{username})")
+
+def get_recent_chat_history(chat_id, limit=10):
+    conn = sqlite3.connect('violations.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT user_id, username, message, reply_to_message_id, timestamp
+        FROM chat_history
+        WHERE chat_id = ?
+        ORDER BY timestamp DESC
+        LIMIT ?
+    ''', (chat_id, limit))
+    history = cursor.fetchall()
+    conn.close()
+    return history
+
+# --- صف API ---
+api_queue = queue.Queue()
+def process_api_queue():
+    while True:
+        try:
+            text, model, callback = api_queue.get()
+            logger.info(f"Processing API request: {text[:50]}...")
+            # تغییر به Groq API
+            payload = {
+                "model": "llama3-70b-8192",  # مدل پیش‌فرض Groq (می‌تونی تغییر بدی)
+                "messages": [{"role": "system", "content": SYSTEM_MESSAGE}, {"role": "user", "content": text}]
+            }
+            headers = {
+                "Authorization": f"Bearer {GROQ_API_KEY}",
+                "Content-Type": "application/json"
+            }
+            for attempt in range(3):
+                try:
+                    response = requests.post(GROQ_API_URL, json=payload, headers=headers)
+                    response.raise_for_status()
+                    ai_reply = response.json()['choices'][0]['message']['content']
+                    logger.info(f"API response: {ai_reply[:50]}...")
+                    callback(ai_reply.strip())
+                    time.sleep(2)
+                    break
+                except requests.HTTPError as e:
+                    if e.response.status_code == 429:
+                        logger.warning(f"Rate limit hit, retrying after {2 * (attempt + 1)} seconds...")
+                        time.sleep(2 * (attempt + 1))
+                        continue
+                    else:
+                        logger.error(f"HTTP Error: {e}")
+                        callback(None)
+                        break
+                except requests.RequestException as e:
+                    logger.error(f"Request Error: {e}")
+                    callback(None)
+                    break
+            else:
+                logger.error("Failed after retries.")
+                callback(None)
+            api_queue.task_done()
+        except Exception as e:
+            logger.error(f"Error in API queue: {e}")
+threading.Thread(target=process_api_queue, daemon=True).start()
+def analyze_message(text, model='openai', callback=lambda x: None):
+    api_queue.put((text, model, callback))
+
+def should_respond_or_violate(text, bot_username, user_id, username, callback):
+    response_triggers = get_setting('response_triggers', '')
+    no_response_triggers = get_setting('no_response_triggers', '')
+    violation_triggers = get_setting('violation_triggers', '')
+    no_violation_triggers = get_setting('no_violation_triggers', '')
+    logger.info(f"Analyzing message from {user_id} (@{username}): {text}")
+    prompt = f"""
+    شما یک دستیار هوشمند در گروه‌های تلگرامی هستید که به مدیریت گروه کمک می‌کنید و به سوالات کاربران پاسخ می‌دهید.
+    پیام زیر را تحلیل کنید و تصمیم بگیرید:
+    1. اگر پیام شامل کلمات کلیدی یا الگوهای زیر باشد: {response_triggers}، یا مستقیماً خطاب به ربات باشد (مثلاً با منشن یا در چت خصوصی)، پاسخ دهید.
+    2. اگر پیام شامل کلمات کلیدی زیر باشد: {no_response_triggers}، پاسخ ندهید.
+    3. اگر پیام شامل کلمات کلیدی یا الگوهای زیر باشد: {violation_triggers}، آن را به عنوان تخلف علامت‌گذاری کنید.
+    4. اگر پیام شامل کلمات کلیدی زیر باشد: {no_violation_triggers}، آن را به عنوان تخلف علامت‌گذاری نکنید.
+    همچنین، اگر پیام یک سوال مهم است که نیاز به پاسخ دارد، اما مطمئن نیستید که باید پاسخ دهید، از کاربر اجازه بگیرید.
+    متن پیام: {text}
+    پاسخ شما باید یکی از موارد زیر باشد:
+    - 'پاسخ بده': اگر باید مستقیماً پاسخ دهید
+    - 'اجازه بگیر': اگر باید از کاربر اجازه بگیرید
+    - 'تخلف': اگر پیام تخلف است
+    - 'هیچی': اگر هیچ کدام از موارد بالا صدق نمی‌کند
+    """
+    analyze_message(prompt, model='openai', callback=callback)
+
+def generate_response(text, user_id, username, callback, chat_history=None):
+    response_triggers = get_setting('response_triggers', '')
+    
+    # Get user's full name if available
+    user_fullname = None
+    if chat_history and len(chat_history) > 0:
+        for msg in chat_history:
+            if str(msg[0]) == str(user_id):
+                user_fullname = msg[1]  # Username is stored in index 1
+                break
+    
+    logger.info(f"Generating response for {user_id} (@{username}): {text}")
+    
+    history_context = ""
+    if chat_history:
+        history_context = "\nتاریخچه چت اخیر:\n"
+        for msg in chat_history:
+            history_context += f"@{msg[1]}: {msg[2]}\n"
+    
+    # Create a personalized prompt with user's information
+    user_info = f"نام و نام کاربری کاربر: @{username}" if not user_fullname else f"نام و نام کاربری کاربر: {user_fullname} (@{username})"
+    
+    prompt = f"""
+    شما دستیار هوشمند PlatoDex هستید و درمورد پلاتو به کاربران کمک میکنید و به صورت خودمونی جذاب و با ایموجی حرف میزنی به صورت نسل Z و کمی با طنز حرف بزن و شوخی کنه. به مشخصات آیتم‌های پلاتو دسترسی داری و می‌تونی به سوالات کاربر در مورد آیتم‌ها جواب بدی و راهنمایی کنی چطور با دستور /i مشخصات کامل رو بگیرن.
+    
+    {user_info}
+    متن و یا سوال و جواب کاربر: {text}
+    تاریخچه پیام کاربران :{history_context}
+    
+    به عنوان یک دستیار حرفه‌ای و دوستانه:
+    - لطفا در پاسخ از نام کاربر استفاده کن و اگر نام انگلیسی است به فارسی تبدیل کن
+    - پاسخ باید کوتاه، دقیق و جذاب باشد
+    - از ایموجی‌های مناسب استفاده کن
+    - با لحن نسل Z و دوستانه صحبت کن
+    - اگر سوال مرتبط با کلمات کلیدی ({response_triggers}) باشد، پاسخ مرتبط بده
+    - اگر نیاز است، هشدار دهید که برای اطلاعات دقیق‌تر با متخصص مشورت کنند
+    - اگر سوالی است که نیاز به اجازه کاربر دارد، از او اجازه بگیرید
+    - اگر سوال در مورد آیتم‌های پلاتو است، راهنمایی کن که از دستور /i استفاده کنند
+    - اگر سوال در مورد چند اکانت است، توضیح بده که از تاریخ 28 فروردین 1404 پلاتو سرورهای قدیمی غیرفعال شده‌اند
+    - اگر سوال در مورد دوستان است، توضیح بده که دیگر نمی‌توان دوستان کاربران دیگر را دید
+    - اگر سوال در مورد سلاطین پلاتو است، توضیح بدهبا این اپ ها میتونن چندین اکانت با این اپ ها بسازند و سکه روزانه را ذخیره و یا برای خودشون ایتم بخرند یا بفروشند فرق مگ و ویپ در این هست. افرادی که قبلا نسخه های قبلی مگ و ویپ داشتند میتونن با اپ های بالا که در کانال آپلود شده اپدیت کنن و به سکه های قفل شده در نسخه قبلی دسترسی‌ داشته باشند"
     "آیدی تلگرامی مدیر سلاطین پلاتو: @BeniHFX ایدی پلاتویی: Salatin"
 )
 

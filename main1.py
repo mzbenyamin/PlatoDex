@@ -27,9 +27,8 @@ logger = logging.getLogger(__name__)
 
 # توکن و آدرس‌ها
 TOKEN = '7764880184:AAEAp5oyNfB__Cotdmtxb9BHnWgwydRN0ME'
-GROQ_API_KEY = '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'  # اینجا API key Groq رو وارد کن
-IMAGE_API_URL = 'https://pollinations.ai/prompt/'  # تصویر همچنان از Pollinations
-GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions'  # API جدید Groq
+IMAGE_API_URL = 'https://pollinations.ai/prompt/'
+TEXT_API_URL = 'https://text.pollinations.ai/generate'
 URL = "https://platopedia.com/items"
 BASE_IMAGE_URL = "https://profile.platocdn.com/"
 WEBHOOK_URL = "https://platodex.onrender.com/webhook"
@@ -245,22 +244,31 @@ def process_api_queue():
         try:
             text, model, callback = api_queue.get()
             logger.info(f"Processing API request: {text[:50]}...")
-            # تغییر به Groq API
+            
+            # Updated payload structure for OpenRouter API
             payload = {
-                "model": "llama3-70b-8192",  # مدل پیش‌فرض Groq (می‌تونی تغییر بدی)
-                "messages": [{"role": "system", "content": SYSTEM_MESSAGE}, {"role": "user", "content": text}]
+                "model": "openai/gpt-oss-20b:free",
+                "messages": [
+                    {"role": "system", "content": "تو یک دستیار هوشمند، خوش‌اخلاق و خودمونی هستی که به فارسی جواب می‌دی و لحن شوخ داری 😄"},
+                    {"role": "user", "content": text}
+                ]
             }
-            headers = {
-                "Authorization": f"Bearer {GROQ_API_KEY}",
-                "Content-Type": "application/json"
-            }
+            
             for attempt in range(3):
                 try:
-                    response = requests.post(GROQ_API_URL, json=payload, headers=headers)
+                    response = requests.post(
+                        url="https://openrouter.ai/api/v1/chat/completions",
+                        headers={
+                            "Authorization": "Bearer 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",
+                            "Content-Type": "application/json",
+                        },
+                        json=payload,
+                        timeout=30
+                    )
                     response.raise_for_status()
-                    ai_reply = response.json()['choices'][0]['message']['content']
-                    logger.info(f"API response: {ai_reply[:50]}...")
-                    callback(ai_reply.strip())
+                    ai_response = response.json()["choices"][0]["message"]["content"]
+                    logger.info(f"API response: {ai_response[:50]}...")
+                    callback(ai_response.strip())
                     time.sleep(2)
                     break
                 except requests.HTTPError as e:
@@ -349,114 +357,30 @@ def generate_response(text, user_id, username, callback, chat_history=None):
     - اگر سوال در مورد آیتم‌های پلاتو است، راهنمایی کن که از دستور /i استفاده کنند
     - اگر سوال در مورد چند اکانت است، توضیح بده که از تاریخ 28 فروردین 1404 پلاتو سرورهای قدیمی غیرفعال شده‌اند
     - اگر سوال در مورد دوستان است، توضیح بده که دیگر نمی‌توان دوستان کاربران دیگر را دید
-    - اگر سوال در مورد سلاطین پلاتو است، توضیح بدهبا این اپ ها میتونن چندین اکانت با این اپ ها بسازند و سکه روزانه را ذخیره و یا برای خودشون ایتم بخرند یا بفروشند فرق مگ و ویپ در این هست. افرادی که قبلا نسخه های قبلی مگ و ویپ داشتند میتونن با اپ های بالا که در کانال آپلود شده اپدیت کنن و به سکه های قفل شده در نسخه قبلی دسترسی‌ داشته باشند"
-    "آیدی تلگرامی مدیر سلاطین پلاتو: @BeniHFX ایدی پلاتویی: Salatin"
-)
-
-
-
-# --- صف API ---
-api_queue = queue.Queue()
-def process_api_queue():
-    while True:
-        try:
-            text, model, callback = api_queue.get()
-            logger.info(f"Processing API request: {text[:50]}...")
-            
-            # ساخت URL با پارامترهای model و token
-            api_url = f"{TEXT_API_URL}?model={GPT_MODEL}&token={POLLINATIONS_TOKEN}"
-            
-            payload = {
-                "messages": [{"role": "user", "content": text}],
-                "max_tokens": MAX_TOKENS,
-                "temperature": TEMPERATURE
-            }
-            
-            headers = {
-                "Content-Type": "application/json"
-            }
-            
-            for attempt in range(3):
-                try:
-                    response = requests.post(api_url, json=payload, headers=headers, timeout=30)
-                    response.raise_for_status()
-                    logger.info(f"API response: {response.text[:50]}...")
-                    callback(response.text.strip())
-                    time.sleep(2)
-                    break
-                except requests.HTTPError as e:
-                    if e.response.status_code == 429:
-                        logger.warning(f"Rate limit hit, retrying after {2 * (attempt + 1)} seconds...")
-                        time.sleep(2 * (attempt + 1))
-                        continue
-                    elif e.response.status_code == 402:
-                        logger.error("API requires authentication. Please visit https://auth.pollinations.ai")
-                        callback("متأسفانه API نیاز به احراز هویت دارد. لطفاً بعداً امتحان کنید.")
-                        break
-                    else:
-                        logger.error(f"HTTP Error: {e}")
-                        callback(None)
-                        break
-                except requests.RequestException as e:
-                    logger.error(f"Request Error: {e}")
-                    callback(None)
-                    break
-            else:
-                logger.error("Failed after retries.")
-                callback(None)
-            api_queue.task_done()
-        except Exception as e:
-            logger.error(f"Error in API queue: {e}")
-threading.Thread(target=process_api_queue, daemon=True).start()
-def analyze_message(text, model='openai', callback=lambda x: None):
-    api_queue.put((text, model, callback))
-
-
-
-def generate_response(text, user_id, username, callback, chat_history=None):
-    # Get user's full name if available
-    user_fullname = None
-    if chat_history and len(chat_history) > 0:
-        for msg in chat_history:
-            if str(msg[0]) == str(user_id):
-                user_fullname = msg[1]  # Username is stored in index 1
-                break
-    
-    logger.info(f"Generating response for {user_id} (@{username}): {text}")
-    
-    history_context = ""
-    if chat_history:
-        history_context = "\nتاریخچه چت اخیر:\n"
-        for msg in chat_history:
-            history_context += f"@{msg[1]}: {msg[2]}\n"
-    
-    # Create a personalized prompt with user's information
-    user_info = f"نام و نام کاربری کاربر: @{username}" if not user_fullname else f"نام و نام کاربری کاربر: {user_fullname} (@{username})"
-    
-    prompt = f"""
-    شما دستیار هوشمند گروه سلاطین پلاتو هستید و به سبک نسل الفا صحبت میکنید و خیلی خودمونی حرف میزنید
-    {user_info}
-    متن و یا سوال و جواب کاربر: {text}
-    تاریخچه پیام کاربران :{history_context}
-    به عنوان یک دستیار حرفه‌ای و دوستانه
-    - لطفا در پاسخ از نام کاربر استفاده کن و اگر نام انگلیسی است به فارسی تبدیل کن
-    - پاسخ باید کوتاه، دقیق و جذاب باشد
-    - از ایموجی‌های مناسب استفاده کن
-    - با لحن نسل Z و دوستانه صحبت کن
-    - اگر سوال مرتبط با کلمات کلیدی باشد، پاسخ مرتبط بده
-    - اگر نیاز است، هشدار دهید که برای اطلاعات دقیق‌تر با متخصص مشورت کنند
-    - اگر سوالی است که نیاز به اجازه کاربر دارد، از او اجازه بگیرید
-    - اگر سوال در مورد آیتم‌های پلاتو است، راهنمایی کن که از دستور /i استفاده کنند
-    - اگر سوال در مورد چند اکانت است، توضیح بده که از تاریخ 28 فروردین 1404 پلاتو سرورهای قدیمی غیرفعال شده‌اند
-    - اگر سوال در مورد دوستان است، توضیح بده که دیگر نمی‌توان دوستان کاربران دیگر را دید
     - اگر سوال در مورد سلاطین پلاتو است، توضیح بده که اولین رسانه فارسی‌زبون پلاتو از 1400 با مدیریت بنیامین است
-    مثال
+    
+    مثال:
     پیام: "سوال دارم"
     پاسخ: "سلام [نام کاربر]! 😊 چطور می‌تونم کمکت کنم؟ هر سوالی داری بپرس، من اینجام تا راهنماییت کنم! 🎮✨"
     """
     analyze_message(prompt, model='openai', callback=callback)
 
-
+def generate_violation_reason(text, callback):
+    prompt = f"""
+    شما یک دستیار هوشمند در گروه‌های تلگرامی هستید که به مدیریت گروه کمک می‌کنید.
+    پیام زیر را تحلیل کنید و دلیل دقیق تخلف را توضیح دهید:
+    - دلیل باید واضح و حرفه‌ای باشد
+    - حداکثر 50 کلمه باشد
+    - از کلمات توهین‌آمیز استفاده نکنید
+    - دلیل باید به صورت مستقیم و بدون ابهام باشد
+    متن پیام: {text}
+    مثال:
+    پیام: "سلام به همه"
+    دلیل: پیام خالی یا بی‌محتوا
+    پیام: "لینک دانلود فیلم"
+    دلیل: ارسال لینک غیرمجاز و تبلیغات
+    """
+    analyze_message(prompt, model='openai', callback=callback)
 
 # --- دستورات ادمین و هندلرهای مدیریتی ---
 from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove
@@ -467,9 +391,8 @@ async def admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.chat.type == 'private' and user_id == ADMIN_ID:
         keyboard = [
             ['تنظیم پاسخ‌ها', 'تنظیم تخلف‌ها'],
-            ['تست API', 'وضعیت ربات'],
             ['تنظیم عدم پاسخ', 'تنظیم عدم تخلف'],
-            ['خروج']
+            ['وضعیت ربات', 'خروج']
         ]
         reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
         await update.message.reply_text(
@@ -482,47 +405,6 @@ async def admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "<b>سلام!</b> من ربات گروه هستم. برای سوال، من رو منشن کنید یا توی چت خصوصی پیام بدید.",
             parse_mode='HTML'
         )
-
-async def test_api(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    if update.message.chat.type == 'private' and user_id == ADMIN_ID:
-        await update.message.reply_text("🔄 در حال تست API...")
-        
-        try:
-            # تست ساده API
-            # ساخت URL با پارامترهای model و token
-            api_url = f"{TEXT_API_URL}?model={GPT_MODEL}&token={POLLINATIONS_TOKEN}"
-            
-            test_payload = {
-                "messages": [{"role": "user", "content": "سلام، این یک تست است"}],
-                "max_tokens": 100,
-                "temperature": 0.7
-            }
-            
-            headers = {
-                "Content-Type": "application/json"
-            }
-            
-            response = requests.post(api_url, json=test_payload, headers=headers, timeout=30)
-            
-            if response.status_code == 200:
-                await update.message.reply_text(
-                    f"✅ API با موفقیت کار می‌کند!\n\n"
-                    f"مدل: {GPT_MODEL}\n"
-                    f"توکن: {POLLINATIONS_TOKEN[:8]}...\n"
-                    f"پاسخ: {response.text[:100]}..."
-                )
-            else:
-                await update.message.reply_text(
-                    f"❌ خطا در API!\n\n"
-                    f"کد خطا: {response.status_code}\n"
-                    f"پیام: {response.text}"
-                )
-                
-        except Exception as e:
-            await update.message.reply_text(f"❌ خطا در تست API: {str(e)}")
-    else:
-        await update.message.reply_text("شما دسترسی ادمین ندارید.")
 
 async def warn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -542,8 +424,10 @@ async def warn(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not target_user_id:
         await update.message.reply_text("کاربر پیدا نشد.", parse_mode='HTML')
         return
+    log_violation(target_user_id, target_username, "اخطار دستی توسط ادمین")
+    violation_count = count_violations(target_user_id)
     await update.message.reply_text(
-        f"<b>⚠️ اخطار</b>\n\nکاربر <a href='tg://user?id={target_user_id}'>@{target_username}</a> شما یک اخطار دریافت کردید\n\n<b>📇 علت:</b> اخطار دستی",
+        f"<b>⚠️ تخلف و اخطار</b>\n\nکاربر <a href='tg://user?id={target_user_id}'>@{target_username}</a> شما یک خطا دریافت کردید\n\n<b>📇 علت:</b> اخطار دستی\n\n<b>❗️اخطارهای شما:</b> {violation_count}",
         parse_mode='HTML'
     )
 
@@ -583,6 +467,7 @@ async def clear_violations_cmd(update: Update, context: ContextTypes.DEFAULT_TYP
     if not target_user_id:
         await update.message.reply_text("کاربر پیدا نشد.", parse_mode='HTML')
         return
+    clear_violations(target_user_id)
     await update.message.reply_text(
         f"تخلف‌های <a href='tg://user?id={target_user_id}'>@{target_username}</a> پاک شد.",
         parse_mode='HTML'
@@ -644,7 +529,26 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ),
                     0
                 )
-
+            elif 'تخلف' in decision:
+                log_violation(str(user_id), username, message_text)
+                violation_count = count_violations(str(user_id))
+                def violation_reason_callback(reason):
+                    if not reason:
+                        reason = "محتوای غیرمجاز یا تخلف از قوانین"
+                    context.job_queue.run_once(
+                        lambda ctx: ctx.bot.send_message(
+                            chat_id=chat_id,
+                            text=f"⚠️ <b>اخطار</b>\n\n"
+                                 f"{update.message.from_user.mention_html()} شما یک اخطار دریافت کردید\n\n"
+                                 f"📇 <b>علت:</b> {reason}\n\n"
+                                 f"❗️<b>تعداد اخطارهای شما:</b> {violation_count}",
+                            parse_mode='HTML',
+                            reply_to_message_id=message_id
+                        ),
+                        0
+                    )
+                generate_violation_reason(message_text, violation_reason_callback)
+        should_respond_or_violate(message_text, bot_username, user_id, username, callback)
 
 # --- هندلر CallbackQuery برای اجازه پاسخ ---
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -667,8 +571,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
                     )
             generate_response(message.text, user_id, message.from_user.username or "Unknown", reply_callback)
     await query.message.delete()
-# --- تابع main اصلی ---
+# --- فراخوانی init_db و افزودن هندلرها در main ---
 async def main():
+    init_db()
     application = Application.builder().token(TOKEN).build()
     
     # Add handlers
@@ -676,7 +581,6 @@ async def main():
     application.add_handler(CommandHandler("violations", violations)) 
     application.add_handler(CommandHandler("clearviolations", clear_violations_cmd))
     application.add_handler(CommandHandler("admin", admin_start))
-    application.add_handler(CommandHandler("test_api", test_api))
     application.add_handler(CallbackQueryHandler(handle_callback_query, pattern="^(allow_|deny_).*$"))
 
     return application
@@ -2651,28 +2555,30 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_history.append({"role": "user", "content": user_message})
     context.user_data["chat_history"] = chat_history
     
-    # محدود کردن تاریخچه به 10 پیام آخر
-    recent_history = chat_history[-10:] if len(chat_history) > 10 else chat_history
-    
-    # Updated payload structure for Pollinations API
+    # Updated payload structure for OpenRouter API
     payload = {
+        "model": "openai/gpt-oss-20b:free",
         "messages": [
-            {"role": "system", "content": system_message}
-        ] + recent_history,  # اضافه کردن تاریخچه محدود شده
-        "model": "openai",
-        "max_tokens": 500,
-        "temperature": 0.7
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_message}
+        ]
     }
     
-    reply_markup = None
-    
-    # ساخت URL با پارامترهای model و token
-    api_url = f"{TEXT_API_URL}?model={GPT_MODEL}&token={POLLINATIONS_TOKEN}"
+    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
     
     try:
-        response = requests.post(api_url, json=payload, timeout=30)
+        response = requests.post(
+            url="https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": "Bearer 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",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=30
+        )
         if response.status_code == 200:
-            ai_response = clean_text(response.text.strip())
+            ai_response = clean_text(response.json()["choices"][0]["message"]["content"])
             chat_history.append({"role": "assistant", "content": ai_response})
             context.user_data["chat_history"] = chat_history
             await update.message.reply_text(ai_response, reply_markup=reply_markup)
@@ -2717,20 +2623,10 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     
     should_reply = (
         "ربات" in user_message or "پلاتو" in user_message or "سلام" in user_message or "خداحافظ" in user_message or
-        "bot" in user_message or "hello" in user_message or "hi" in user_message or "bye" in user_message or
-        "plato" in user_message or "پلاتودکس" in user_message or "@plato" in user_message or
         (replied_message and replied_message.from_user.id == context.bot.id)
     )
     
-    logger.info(f"Group message: '{user_message}' - should_reply: {should_reply}")
-    
-    # تست ساده برای بررسی عملکرد
-    if "تست" in user_message:
-        await update.message.reply_text("✅ ربات در گروه کار می‌کند!")
-        return
-    
     if not should_reply:
-        logger.info(f"Not replying to message: '{user_message}'")
         return
     
     if replied_message and replied_message.from_user.id == context.bot.id:
@@ -2744,23 +2640,27 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     if user_fullname:
         system_message = f"نام و نام خانوادگی کاربر: {user_fullname}\n" + SYSTEM_MESSAGE + "\nلطفا در پاسخ‌های خود از نام کاربر استفاده کنید و اگر نام انگلیسی است به فارسی تبدیل کنید."
     
-    # Updated payload structure for Pollinations API
+    # Updated payload structure for OpenRouter API
     payload = {
+        "model": "openai/gpt-oss-20b:free",
         "messages": [
-            {"role": "system", "content": system_message}
-        ] + user_history,  # اضافه کردن کل تاریخچه (نامحدود)
-        "model": "openai",
-        "max_tokens": 500,
-        "temperature": 0.7
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": user_message}
+        ]
     }
     
-    # ساخت URL با پارامترهای model و token
-    api_url = f"{TEXT_API_URL}?model={GPT_MODEL}&token={POLLINATIONS_TOKEN}"
-    
     try:
-        response = requests.post(api_url, json=payload, timeout=30)
+        response = requests.post(
+            url="https://openrouter.ai/api/v1/chat/completions",
+            headers={
+                "Authorization": "Bearer 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",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=30
+        )
         if response.status_code == 200:
-            ai_response = clean_text(response.text.strip())
+            ai_response = clean_text(response.json()["choices"][0]["message"]["content"])
             user_history.append({"role": "assistant", "content": ai_response})
             context.user_data["group_chat_history"] = user_history
             await update.message.reply_text(ai_response, message_thread_id=thread_id)
@@ -2776,8 +2676,6 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
             clean_text("خطایی رخ داد! 😭 بعداً دوباره امتحان کن 🚀"),
             message_thread_id=thread_id
         )
-
-
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -2933,14 +2831,13 @@ async def main():
             application.add_handler(CommandHandler("start", start))
             application.add_handler(CommandHandler("cancel", cancel))
             application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
-
             application.add_handler(search_conv_handler)
             application.add_handler(image_conv_handler)
             application.add_handler(group_image_conv_handler)
             application.add_handler(InlineQueryHandler(inline_query))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r'^@PlatoDex\s+\w+'), handle_inline_selection))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
             # Add group message handler for general group messages (not AI chat)
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_message))
             application.add_handler(CommandHandler("item", process_item_in_group, filters=filters.ChatType.GROUPS))

@@ -32,7 +32,7 @@ MAJID_AI_URL = 'https://api.majidapi.ir/ai/copilot'
 MAJID_AI_TOKEN = 'sy8nbfxproszixn:SUFefQO1WnetrcJxYu4J'
 URL = "https://platopedia.com/items"
 BASE_IMAGE_URL = "https://profile.platocdn.com/"
-WEBHOOK_URL = "https://PlatoBot.onrender.com/webhook"
+WEBHOOK_URL = "https://platodex.onrender.com/webhook"
 EXTRACTED_ITEMS = []
 AI_CHAT_USERS = set()
 SEARCH_ITEM, SELECT_CATEGORY = range(2)
@@ -53,7 +53,7 @@ def generate_safe_callback_data(prompt):
 
 SYSTEM_MESSAGE = (
     "شما دستیار هوشمند PlatBot درمورد پلاتو به کاربران کمک میکنید با ایموجی صحبت میکنید"
-    "خیلی خیلیی کوتاه جواب میدی و مففید"
+    "خیلی کوتاه جواب میدی و مففید"
     "به صورت نسل Z صحبت میکنی و دوستانه و جذاب و با کمی شوخی و از ایموجی استفاده کن"
     "به سوالات کاربر در مورد آیتم‌ها جواب بدی و راهنمایی کنی چطور با دستور /i مشخصات کامل رو بگیرن\\. "
     "حذف اکانت\n"
@@ -108,7 +108,7 @@ SYSTEM_MESSAGE = (
     "ID قبلیم کی آزاد می‌شه؟\nبین 24 تا 72 ساعت تصادفیه\\.\\n"
     "IDم تو انتقال دزدیده شد، برمی‌گردونین؟\nپلاتو انتقال رو ساپورت نمی‌کنه، ریسک خودته\\.\\n"
     "یه ID غیرفعال می‌خوام، آزاد می‌کنین؟\nگاهی آزاد می‌کنن، ولی درخواستی نه\\.\\n"
-    "PlatoBot رو چطور از لیست دوستام پاک کنم؟\nنمی‌شه، مهربونه!\n"
+    "platodex رو چطور از لیست دوستام پاک کنم؟\nنمی‌شه، مهربونه!\n"
     "آیتم رو از inventoryم چطور پاک کنم؟\nنمی‌شه، دائميه\\.\\n"
     "چرا سکه‌هام غیبشون زد؟\nشاید ریفاند درخواست دادی، ایمیل بزن\\.\\n"
     "چطور ببینم کی به اکانتم لاگینه؟\nبرو ⚙️ > Devices\\.\\n\\n"
@@ -117,7 +117,7 @@ SYSTEM_MESSAGE = (
     "چطور بلاک کنم؟\nرو پروفایل طرف بزن و Block رو انتخاب کن\\. چتشون قطع می‌شه و نمی‌تونن بازیاتو جوین کنن\\.\\n"
     "سیاست حریم خصوصی چیه؟\nخیلی جدیه، اینجا بخون: https://platoapp\\.com/privacy\\n\\n"
     "لینکای دانلود پلاتو\n- اندروید: https://play.google.com/store/apps/details?id=com.plato.android\n- iOS: https://apps.apple.com/app/plato-play-chat-together/id1054747306?ls=1\n"
-    "سلاطین پلاتو چیه؟\nاولین رسانه فارسی‌زبون پلاتو از 1400 با مدیریت بنیامین\\. اخبار و ترفندای پلاتو رو می‌دن و یه مینی‌اپ تلگرامی @PlatoBot دارن که رتبه‌بندی بازیکنا و آیتما رو نشون می‌ده\\ - کانال: @salatin_plato - گروه: @Gap_Plato\n\n"
+    "سلاطین پلاتو چیه؟\nاولین رسانه فارسی‌زبون پلاتو از 1400 با مدیریت بنیامین\\. اخبار و ترفندای پلاتو رو می‌دن و یه مینی‌اپ تلگرامی @platodex دارن که رتبه‌بندی بازیکنا و آیتما رو نشون می‌ده\\ - کانال: @salatin_plato - گروه: @Gap_Plato\n\n"
     "چند اکانت تو یه دستگاه\n"
     "نسخه افلاطون: کنار نسخه اصلی نصب کن، از ربات بگیر\\.\\n"
     "متاسفانه از تاریخ 28 فروردین 1404 پلاتو سرور های قدیمی پلاتو که میشد باهاشون کلون کرد رو غیرفعال کرد و دسترسی رو محدود کرد اگر میخوای چند اکانت داشته باشی حتما ایمیل روشون ثبت کن"
@@ -575,7 +575,7 @@ async def webhook(request: Request):
 
 @app.get("/")
 async def root():
-    return {"message": "PlatoBot Bot is running!"}
+    return {"message": "platodex Bot is running!"}
 
 @app.head("/webhook")
 async def webhook_head():
@@ -876,7 +876,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     user_name = update.message.from_user.first_name
     welcome_message = clean_text(
-        f"سلام {user_name}!\nبه PlatoBot خوش اومدی - مرکز بازی‌های Plato!\n"
+        f"سلام {user_name}!\nبه platodex خوش اومدی - مرکز بازی‌های Plato!\n"
         "• آیتم‌ها رو ببین 🎲\n• رتبه‌بندی بازیکن‌ها رو چک کن 🏆\n• اخبار رو دنبال کن 🎯"
     )
     keyboard = [
@@ -1072,7 +1072,7 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
                 original_message_id = context.user_data.get("original_message_id", query.message.reply_to_message.message_id)
-                caption_text = clean_text(f"🪄 پرامت تصویر ایجاد شده شما:\n\n{display_prompt}\n\n@PlatoBot")
+                caption_text = clean_text(f"🪄 پرامت تصویر ایجاد شده شما:\n\n{display_prompt}\n\n@platodex")
                 
                 message = await context.bot.send_photo(
                     chat_id=chat_id,
@@ -1303,7 +1303,7 @@ async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
                 # ارسال تصویر با کپشن مناسب
-                caption_text = clean_text(f"🪄 پرامت تصویر ایجاد شده شما:\n\n{display_prompt}\n\n@PlatoBot")
+                caption_text = clean_text(f"🪄 پرامت تصویر ایجاد شده شما:\n\n{display_prompt}\n\n@platodex")
                 
                 message = await context.bot.send_photo(
                     chat_id=chat_id,
@@ -1437,7 +1437,7 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📃 توضیحات: {item['description']}\n"
                 f"\n"
                 f"💸 قیمت: {price_info}\n"
-                f"📣 @PlatoBot"
+                f"📣 @platodex"
             )
             results.append(
                 InlineQueryResultArticle(
@@ -1466,7 +1466,7 @@ async def handle_inline_selection(update: Update, context: ContextTypes.DEFAULT_
         f"📃 توضیحات: {item['description']}\n"
         f"\n"
         f"💸 قیمت: {price_info}\n"
-        f"📣 @PlatoBot"
+        f"📣 @platodex"
     )
     
     if item["images"]:
@@ -1581,7 +1581,7 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
             f"📃 توضیحات: {item['description']}\n"
             f"\n"
             f"💸 قیمت: {price_info}\n"
-            f"📣 @PlatoBot"
+            f"📣 @platodex"
         )
         keyboard = [[InlineKeyboardButton("↩️ برگشت به لیست آیتم‌ها", callback_data="back_to_items")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1802,7 +1802,7 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📃 توضیحات: {item['description']}\n"
         f"\n"
         f"💸 قیمت: {price_info}\n"
-        f"📣 @PlatoBot"
+        f"📣 @platodex"
     )
     
     keyboard = [[InlineKeyboardButton("↩️ برگشت به لیست آیتم‌ها", callback_data="back_to_items")]]
@@ -1966,7 +1966,7 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
             f"📃 توضیحات: {item['description']}\n"
             f"\n"
             f"💸 قیمت: {price_info}\n"
-            f"📣 @PlatoBot"
+            f"📣 @platodex"
         )
         if item["images"]:
             await update.message.reply_photo(
@@ -2226,7 +2226,7 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📃 توضیحات: {item['description']}\n"
         f"\n"
         f"💸 قیمت: {price_info}\n"
-        f"📣 @PlatoBot"
+        f"📣 @platodex"
     )
     
     try:
@@ -2513,9 +2513,9 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Build a short prompt - only send user message to avoid URI too long error
     # Include user name if available
     if user_fullname:
-        prompt = f"کاربر {user_fullname} می‌پرسد: {user_message}\n\nشما دستیار هوشمند PlatoBot هستید و درمورد پلاتو به کاربران کمک می‌کنید. با ایموجی و به صورت خودمونی و طنز جواب بده."
+        prompt = f"کاربر {user_fullname} می‌پرسد: {user_message}\n\nشما دستیار هوشمند platodex هستید و درمورد پلاتو به کاربران کمک می‌کنید. با ایموجی و به صورت خودمونی و طنز جواب بده."
     else:
-        prompt = f"سوال: {user_message}\n\nشما دستیار هوشمند PlatoBot هستید و درمورد پلاتو به کاربران کمک می‌کنید. با ایموجی و به صورت خودمونی و طنز جواب بده."
+        prompt = f"سوال: {user_message}\n\nشما دستیار هوشمند platodex هستید و درمورد پلاتو به کاربران کمک می‌کنید. با ایموجی و به صورت خودمونی و طنز جواب بده."
     
     chat_history.append({"role": "user", "content": user_message})
     context.user_data["chat_history"] = chat_history
@@ -2619,9 +2619,9 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     # Build a short prompt - only send user message to avoid URI too long error
     # Include user name if available
     if user_fullname:
-        prompt = f"کاربر {user_fullname} می‌پرسد: {user_message}\n\nشما دستیار هوشمند PlatoBot هستید و درمورد پلاتو به کاربران کمک می‌کنید. با ایموجی و به صورت خودمونی و طنز جواب بده."
+        prompt = f"کاربر {user_fullname} می‌پرسد: {user_message}\n\nشما دستیار هوشمند platodex هستید و درمورد پلاتو به کاربران کمک می‌کنید. با ایموجی و به صورت خودمونی و طنز جواب بده."
     else:
-        prompt = f"سوال: {user_message}\n\nشما دستیار هوشمند PlatoBot هستید و درمورد پلاتو به کاربران کمک می‌کنید. با ایموجی و به صورت خودمونی و طنز جواب بده."
+        prompt = f"سوال: {user_message}\n\nشما دستیار هوشمند platodex هستید و درمورد پلاتو به کاربران کمک می‌کنید. با ایموجی و به صورت خودمونی و طنز جواب بده."
     
     try:
         response = requests.get(
@@ -2834,7 +2834,7 @@ async def main():
             application.add_handler(image_conv_handler)
             application.add_handler(group_image_conv_handler)
             application.add_handler(InlineQueryHandler(inline_query))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r'^@PlatoBot\s+\w+'), handle_inline_selection))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r'^@platodex\s+\w+'), handle_inline_selection))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
             # Add group message handler for general group messages (not AI chat)

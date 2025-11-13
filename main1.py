@@ -28,7 +28,8 @@ logger = logging.getLogger(__name__)
 # توکن و آدرس‌ها
 TOKEN = '7764880184:AAEAp5oyNfB__Cotdmtxb9BHnWgwydRN0ME'
 IMAGE_API_URL = 'https://pollinations.ai/prompt/'
-TEXT_API_URL = 'https://text.pollinations.ai/generate'
+MAJID_AI_URL = 'https://api.majidapi.ir/ai/copilot'
+MAJID_AI_TOKEN = 'sy8nbfxproszixn:SUFefQO1WnetrcJxYu4J'
 URL = "https://platopedia.com/items"
 BASE_IMAGE_URL = "https://profile.platocdn.com/"
 WEBHOOK_URL = "https://platodex.onrender.com/webhook"
@@ -245,28 +246,46 @@ def process_api_queue():
             text, model, callback = api_queue.get()
             logger.info(f"Processing API request: {text[:50]}...")
             
-            # Updated payload structure for OpenRouter API
-            payload = {
-                "model": "openai/gpt-oss-20b:free",
-                "messages": [
-                    {"role": "system", "content": "تو یک دستیار هوشمند، خوش‌اخلاق و خودمونی هستی که به فارسی جواب می‌دی و لحن شوخ داری 😄"},
-                    {"role": "user", "content": text}
-                ]
-            }
-            
             for attempt in range(3):
                 try:
-                    response = requests.post(
-                        url="https://openrouter.ai/api/v1/chat/completions",
-                        headers={
-                            "Authorization": "Bearer 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",
-                            "Content-Type": "application/json",
+                    response = requests.get(
+                        url=MAJID_AI_URL,
+                        params={
+                            "q": text,
+                            "token": MAJID_AI_TOKEN,
                         },
-                        json=payload,
                         timeout=30
                     )
                     response.raise_for_status()
-                    ai_response = response.json()["choices"][0]["message"]["content"]
+                    ai_response = None
+                    try:
+                        data = response.json()
+                        if isinstance(data, dict):
+                            for key in ("response", "result", "answer", "message", "output", "data", "text"):
+                                value = data.get(key)
+                                if isinstance(value, str) and value.strip():
+                                    ai_response = value.strip()
+                                    break
+                            if ai_response is None and data:
+                                # If dict but different structure, use first string value
+                                for value in data.values():
+                                    if isinstance(value, str) and value.strip():
+                                        ai_response = value.strip()
+                                        break
+                        elif isinstance(data, list) and data:
+                            # Join string items if list response
+                            string_parts = [str(item).strip() for item in data if str(item).strip()]
+                            if string_parts:
+                                ai_response = " ".join(string_parts)
+                    except ValueError:
+                        logger.debug("Majid API did not return JSON, falling back to raw text.")
+                    
+                    if not ai_response:
+                        ai_response = response.text.strip()
+                    
+                    if not ai_response:
+                        raise ValueError("Empty response from Majid AI API.")
+
                     logger.info(f"API response: {ai_response[:50]}...")
                     callback(ai_response.strip())
                     time.sleep(2)
@@ -276,12 +295,15 @@ def process_api_queue():
                         logger.warning(f"Rate limit hit, retrying after {2 * (attempt + 1)} seconds...")
                         time.sleep(2 * (attempt + 1))
                         continue
-                    else:
-                        logger.error(f"HTTP Error: {e}")
-                        callback(None)
-                        break
+                    logger.error(f"HTTP Error from Majid AI API: {e}")
+                    callback(None)
+                    break
                 except requests.RequestException as e:
-                    logger.error(f"Request Error: {e}")
+                    logger.error(f"Request Error when calling Majid AI API: {e}")
+                    callback(None)
+                    break
+                except ValueError as e:
+                    logger.error(f"Response parsing error from Majid AI API: {e}")
                     callback(None)
                     break
             else:
@@ -616,13 +638,7 @@ def clean_text(text):
     if not text:
         return ""
     text = text.replace("*", "").replace("`", "").replace("[", "").replace("]", "").replace("!", "!")
-    ad_texts = [
-        "Powered by Pollinations.AI free text APIs. Support our mission(https://pollinations.ai/redirect/kofi) to keep AI accessible for everyone.",
-        "توسط Pollinations.AI به صورت رایگان ارائه شده است. از مأموریت ما حمایت کنید(https://pollinations.ai/redirect/kofi) تا AI برای همه قابل دسترسی باشد."
-    ]
-    for ad_text in ad_texts:
-        if ad_text in text:
-            text = text.replace(ad_text, "").strip()
+    # Removed Pollinations.AI ad texts
     return text.strip()
 
 # تعریف کلاس PlatoItem
@@ -2552,38 +2568,57 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_fullname:
         system_message = f"نام و نام خانوادگی کاربر: {user_fullname}\n" + SYSTEM_MESSAGE + "\nلطفا در پاسخ‌های خود از نام کاربر استفاده کنید و اگر نام انگلیسی است به فارسی تبدیل کنید."
     
+    # Build prompt with system message and user message
+    prompt = f"{system_message}\n\nسوال کاربر: {user_message}"
+    
     chat_history.append({"role": "user", "content": user_message})
     context.user_data["chat_history"] = chat_history
-    
-    # Updated payload structure for OpenRouter API
-    payload = {
-        "model": "openai/gpt-oss-20b:free",
-        "messages": [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": user_message}
-        ]
-    }
     
     keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     try:
-        response = requests.post(
-            url="https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": "Bearer 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",
-                "Content-Type": "application/json",
+        response = requests.get(
+            url=MAJID_AI_URL,
+            params={
+                "q": prompt,
+                "token": MAJID_AI_TOKEN,
             },
-            json=payload,
             timeout=30
         )
-        if response.status_code == 200:
-            ai_response = clean_text(response.json()["choices"][0]["message"]["content"])
+        response.raise_for_status()
+        
+        ai_response = None
+        try:
+            data = response.json()
+            if isinstance(data, dict):
+                for key in ("response", "result", "answer", "message", "output", "data", "text"):
+                    value = data.get(key)
+                    if isinstance(value, str) and value.strip():
+                        ai_response = value.strip()
+                        break
+                if ai_response is None and data:
+                    for value in data.values():
+                        if isinstance(value, str) and value.strip():
+                            ai_response = value.strip()
+                            break
+            elif isinstance(data, list) and data:
+                string_parts = [str(item).strip() for item in data if str(item).strip()]
+                if string_parts:
+                    ai_response = " ".join(string_parts)
+        except ValueError:
+            logger.debug("Majid API did not return JSON, falling back to raw text.")
+        
+        if not ai_response:
+            ai_response = response.text.strip()
+        
+        if ai_response:
+            ai_response = clean_text(ai_response)
             chat_history.append({"role": "assistant", "content": ai_response})
             context.user_data["chat_history"] = chat_history
             await update.message.reply_text(ai_response, reply_markup=reply_markup)
         else:
-            logger.error(f"API Error: {response.status_code} - {response.text}")
+            logger.error(f"Empty response from Majid AI API")
             await update.message.reply_text(
                 clean_text("اوفف، یه مشکلی پیش اومد! 😅 فکر کنم API یه کم خوابش برده! بعداً امتحان کن 🚀"),
                 reply_markup=reply_markup
@@ -2640,32 +2675,51 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     if user_fullname:
         system_message = f"نام و نام خانوادگی کاربر: {user_fullname}\n" + SYSTEM_MESSAGE + "\nلطفا در پاسخ‌های خود از نام کاربر استفاده کنید و اگر نام انگلیسی است به فارسی تبدیل کنید."
     
-    # Updated payload structure for OpenRouter API
-    payload = {
-        "model": "openai/gpt-oss-20b:free",
-        "messages": [
-            {"role": "system", "content": system_message},
-            {"role": "user", "content": user_message}
-        ]
-    }
+    # Build prompt with system message and user message
+    prompt = f"{system_message}\n\nسوال کاربر: {user_message}"
     
     try:
-        response = requests.post(
-            url="https://openrouter.ai/api/v1/chat/completions",
-            headers={
-                "Authorization": "Bearer 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",
-                "Content-Type": "application/json",
+        response = requests.get(
+            url=MAJID_AI_URL,
+            params={
+                "q": prompt,
+                "token": MAJID_AI_TOKEN,
             },
-            json=payload,
             timeout=30
         )
-        if response.status_code == 200:
-            ai_response = clean_text(response.json()["choices"][0]["message"]["content"])
+        response.raise_for_status()
+        
+        ai_response = None
+        try:
+            data = response.json()
+            if isinstance(data, dict):
+                for key in ("response", "result", "answer", "message", "output", "data", "text"):
+                    value = data.get(key)
+                    if isinstance(value, str) and value.strip():
+                        ai_response = value.strip()
+                        break
+                if ai_response is None and data:
+                    for value in data.values():
+                        if isinstance(value, str) and value.strip():
+                            ai_response = value.strip()
+                            break
+            elif isinstance(data, list) and data:
+                string_parts = [str(item).strip() for item in data if str(item).strip()]
+                if string_parts:
+                    ai_response = " ".join(string_parts)
+        except ValueError:
+            logger.debug("Majid API did not return JSON, falling back to raw text.")
+        
+        if not ai_response:
+            ai_response = response.text.strip()
+        
+        if ai_response:
+            ai_response = clean_text(ai_response)
             user_history.append({"role": "assistant", "content": ai_response})
             context.user_data["group_chat_history"] = user_history
             await update.message.reply_text(ai_response, message_thread_id=thread_id)
         else:
-            logger.error(f"API Error: {response.status_code} - {response.text}")
+            logger.error(f"Empty response from Majid AI API")
             await update.message.reply_text(
                 clean_text("مشکلی پیش اومد! 😅 بعداً دوباره امتحان کن 🚀"),
                 message_thread_id=thread_id

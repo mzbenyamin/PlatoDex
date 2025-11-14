@@ -30,6 +30,7 @@ TOKEN = '7764880184:AAEAp5oyNfB__Cotdmtxb9BHnWgwydRN0ME'
 IMAGE_API_URL = 'https://pollinations.ai/prompt/'
 MAJID_AI_URL = 'https://api.majidapi.ir/ai/copilot'
 MAJID_AI_TOKEN = 'sy8nbfxproszixn:SUFefQO1WnetrcJxYu4J'
+REMOVE_BG_API = 'https://api.majidapi.ir/image/remove-background'
 URL = "https://platopedia.com/items"
 BASE_IMAGE_URL = "https://profile.platocdn.com/"
 WEBHOOK_URL = "https://platodex.onrender.com/webhook"
@@ -869,6 +870,9 @@ def schedule_scraping(app: Application):
         raise RuntimeError("JobQueue فعال نیست!")
     app.job_queue.run_repeating(extract_items, interval=12*60*60, first=0)
 
+# States for tools conversation
+TOOLS_MENU, REMOVE_BG = range(2, 4)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id in AI_CHAT_USERS:
@@ -883,9 +887,63 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Run App 📱", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
         [InlineKeyboardButton("Search Items 🔍", callback_data="search_items")],
         [InlineKeyboardButton("Chat with AI 🤖", callback_data="chat_with_ai")],
-        [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")]
+        [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")],
+        [InlineKeyboardButton("ابزار 🔧", callback_data="tools")]
     ]
     await update.message.reply_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
+    return ConversationHandler.END
+
+async def start_tools(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    context.user_data.clear()
+    keyboard = [
+        [InlineKeyboardButton("حذف کردن بک گراند عکس", callback_data="remove_bg")],
+        [InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(
+        clean_text("🔧 بخش ابزارها فعال شد!\n\nگزینه مورد نظر رو انتخاب کن:"),
+        reply_markup=reply_markup
+    )
+    return TOOLS_MENU
+
+async def start_remove_bg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(
+        clean_text("🖼️ برای حذف بک‌گراند، URL عکس رو بفرست (مثل: https://example.com/image.jpg)"),
+        reply_markup=reply_markup
+    )
+    return REMOVE_BG
+
+async def process_remove_bg(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    image_url = update.message.text.strip()
+    if not image_url.startswith("http"):
+        await update.message.reply_text(clean_text("لطفاً یک URL معتبر برای عکس وارد کنید!"))
+        return REMOVE_BG
+    
+    loading_message = await update.message.reply_text(clean_text("🖌️ در حال حذف بک‌گراند... لطفاً صبر کنید."))
+    
+    api_url = f"{REMOVE_BG_API}?url={image_url}&out=photo&token={MAJID_AI_TOKEN}"
+    try:
+        response = requests.get(api_url, timeout=30)
+        if response.status_code == 200:
+            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
+            img_data = io.BytesIO(response.content)
+            img_data.seek(0)
+            await update.message.reply_photo(photo=img_data)
+            await update.message.reply_document(document=img_data, filename="no_bg.png")
+        else:
+            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
+            await update.message.reply_text(clean_text(f"مشکلی پیش اومد! کد خطا: {response.status_code}"))
+    except Exception as e:
+        await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
+        await update.message.reply_text(clean_text("خطایی رخ داد. لطفاً بعداً امتحان کنید."))
+        logger.error(f"خطا در حذف بک‌گراند: {e}")
+    
     return ConversationHandler.END
 
 async def start_generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1103,643 +1161,7 @@ async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_T
                     except Exception as e:
                         logger.warning(f"خطا در به‌روزرسانی پیام بارگذاری: {e}")
                     
-                    # صبر قبل از تلاش بعدی
-                    await asyncio.sleep(retry_delay * (attempt + 1))
-                else:
-                    # این آخرین تلاش بود و باز هم شکست خورد
-                    raise Exception("همه تلاش‌ها با خطای 502 مواجه شدند.")
-                    
-            else:
-                # خطاهای دیگر
-                error_message = f"خطای {response.status_code} از API دریافت شد."
-                logger.error(error_message)
-                raise Exception(error_message)
-                
-        except asyncio.TimeoutError:
-            logger.warning(f"تایم‌اوت در تلاش {attempt + 1} برای تولید مجدد تصویر.")
-            
-            # به کاربر اطلاع بدهیم که تایم‌اوت رخ داده
-            if attempt < max_retries - 1:
-                try:
-                    await context.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=loading_message_id,
-                        text=clean_text(f"🖌️ تایم‌اوت! تلاش مجدد {attempt + 2}/{max_retries}... لطفاً صبر کنید.")
-                    )
-                except Exception as e:
-                    logger.warning(f"خطا در به‌روزرسانی پیام بارگذاری: {e}")
-                
-                await asyncio.sleep(retry_delay * (attempt + 1))
-            else:
-                # این آخرین تلاش بود و باز هم شکست خورد
-                raise Exception("همه تلاش‌ها با تایم‌اوت مواجه شدند.")
-                
-        except Exception as e:
-            # اگر این آخرین تلاش نیست، دوباره تلاش می‌کنیم
-            if attempt < max_retries - 1:
-                logger.warning(f"خطا در تلاش {attempt + 1}: {e}. در حال تلاش مجدد...")
-                
-                try:
-                    await context.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=loading_message_id,
-                        text=clean_text(f"🖌️ خطا رخ داد! تلاش مجدد {attempt + 2}/{max_retries}... لطفاً صبر کنید.")
-                    )
-                except Exception as edit_error:
-                    logger.warning(f"خطا در به‌روزرسانی پیام بارگذاری: {edit_error}")
-                
-                await asyncio.sleep(retry_delay * (attempt + 1))
-            else:
-                # اگر این آخرین تلاش بود، خطا را نمایش می‌دهیم
-                logger.error(f"همه تلاش‌ها برای تولید مجدد تصویر با خطا مواجه شدند: {e}")
-                raise
-    else:
-        # اگر از حلقه خارج شدیم بدون اینکه تصویر را با موفقیت ارسال کنیم
-        # این حالت زمانی رخ می‌دهد که همه تلاش‌ها شکست بخورند اما exception هم پرتاب نشود
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
-        except Exception as e:
-            logger.warning(f"خطا در حذف پیام بارگذاری پس از شکست همه تلاش‌ها: {e}")
-            
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=clean_text("متأسفانه همه تلاش‌ها برای تولید تصویر با شکست مواجه شدند. لطفاً بعداً دوباره امتحان کنید."),
-            message_thread_id=thread_id
-        )
-            
-    # مدیریت خطا برای کل تابع
-    try:
-        pass  # اینجا کاری انجام نمی‌دهیم، فقط برای مدیریت خطاهای احتمالی است
-    except Exception as e:
-        logger.error(f"خطای نهایی در تولید مجدد تصویر گروه: {e}")
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
-        except Exception as del_e:
-            logger.warning(f"خطا در حذف پیام بارگذاری در حالت خطا: {del_e}")
-        
-        error_message = "خطایی رخ داد. لطفاً بعداً امتحان کنید."
-        if "502" in str(e):
-            error_message = "خطای سرور (502). پلتفرم تولید تصویر در حال حاضر در دسترس نیست، لطفاً بعداً امتحان کنید."
-        elif "timed out" in str(e).lower() or "timeout" in str(e).lower():
-            error_message = "زمان پاسخگویی API به پایان رسید. لطفاً با پرامپت کوتاه‌تر امتحان کنید یا بعداً تلاش کنید."
-        
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=clean_text(error_message),
-            message_thread_id=thread_id
-        )
-    
-    return ConversationHandler.END
-
-async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message_id = update.message.message_id
-    async with PROCESSING_LOCK:
-        if message_id in PROCESSED_MESSAGES:
-            logger.warning(f"پیام تکراری در گروه با message_id: {message_id} - نادیده گرفته شد")
-            return
-        PROCESSED_MESSAGES.add(message_id)
-    
-    chat_id = update.effective_chat.id
-    try:
-        await context.bot.get_chat(chat_id)
-    except Exception as e:
-        logger.error(f"خطا در دسترسی به چت {chat_id}: {e}")
-        if "Forbidden" in str(e):
-            await update.message.reply_text(clean_text("متأسفم، من از این گروه بیرون انداخته شدم! 😕 دوباره منو اد کن تا کمکت کنم."))
-        else:
-            await update.message.reply_text(clean_text("یه مشکلی پیش اومد، نمی‌تونم چت رو پیدا کنم! 😅"))
-        return
-    
-    thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
-    
-    if not context.args:
-        await update.message.reply_text(
-            clean_text(
-                "🖌️ لطفاً متنی که می‌خوای به عکس تبدیل بشه رو به انگلیسی بفرست!\n\n"
-                "مثلاً:\n/p a woman"
-            ),
-            message_thread_id=thread_id
-        )
-        return
-    
-    # اینجا متن رو می‌گیریم و اگر طولانی بود کوتاهش می‌کنیم
-    prompt = " ".join(context.args).strip()
-    original_prompt = prompt
-    
-    if not prompt:
-        await update.message.reply_text(
-            clean_text("پرامپت خالیه! یه توضیح برای تصویر بده. مثلاً: /p A flying car"),
-            message_thread_id=thread_id
-        )
-        return
-    
-    # ذخیره پرامپت اصلی برای استفاده در پیام
-    if len(prompt) > 3000:
-        shortened_prompt = prompt[:3000]
-        logger.warning(f"پرامپت بیش از حد طولانی است ({len(prompt)} کاراکتر). کوتاه شد به 3000 کاراکتر.")
-        prompt = shortened_prompt
-    
-    # برای API ما باید متن رو به یک اندازه مناسب کوتاه کنیم (حداکثر 1000 کاراکتر)
-    api_prompt = prompt
-    if len(prompt) > 1000:
-        # برای API فقط 1000 کاراکتر اول استفاده می‌شود
-        api_prompt = prompt[:1000]
-        logger.info(f"پرامپت برای API به 1000 کاراکتر کوتاه شد")
-    
-    loading_message = await update.message.reply_text(
-        clean_text("🖌️ در حال طراحی عکس... لطفاً صبر کنید."),
-        message_thread_id=thread_id
-    )
-    
-    # ذخیره کردن آیدی پیام بارگذاری برای حذف بعدی
-    loading_message_id = loading_message.message_id
-    context.user_data["loading_message_id"] = loading_message_id
-    
-    # تولید seed تصادفی
-    seed = random.randint(1, 999999)
-    
-    # سیستم retry برای مدیریت خطای 502
-    max_retries = 3
-    retry_delay = 2  # ثانیه
-    
-    for attempt in range(max_retries):
-        try:
-            # ایجاد URL با seed مختلف برای هر تلاش
-            retry_seed = seed + attempt
-            api_url = f"{IMAGE_API_URL}{api_prompt}?width=1024&height=1024&nologo=true&seed={retry_seed}"
-            
-            logger.info(f"تلاش {attempt + 1}/{max_retries} برای تولید تصویر با پرامپت: {api_prompt[:50]}...")
-            
-            async with asyncio.timeout(40):  # تایم‌اوت طولانی‌تر برای API
-                response = requests.get(api_url, timeout=40)
-            
-            if response.status_code == 200:
-                # تصویر با موفقیت تولید شد
-                logger.info(f"تصویر با موفقیت تولید شد (تلاش {attempt + 1})")
-                
-                # اول پیام بارگذاری رو پاک می‌کنیم
-                try:
-                    await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
-                    logger.info(f"پیام بارگذاری با ID {loading_message_id} حذف شد.")
-                except Exception as e:
-                    logger.warning(f"خطا در حذف پیام بارگذاری: {e}")
-                
-                # حداکثر طول پرامپت برای نمایش در کپشن
-                display_prompt = original_prompt
-                if len(display_prompt) > 500:
-                    display_prompt = display_prompt[:497] + "..."
-                
-                # تولید callback_data امن
-                safe_callback_data = generate_safe_callback_data(api_prompt)
-                
-                # ذخیره پرامپت‌ها برای استفاده در تولید مجدد
-                callback_mapping = context.user_data.get("callback_to_prompt", {})
-                callback_mapping[safe_callback_data] = api_prompt
-                context.user_data["callback_to_prompt"] = callback_mapping
-                context.user_data["original_prompt"] = original_prompt
-                context.user_data["api_prompt"] = api_prompt
-                
-                keyboard = [[InlineKeyboardButton("🔄 طراحی مجدد تصویر", callback_data=safe_callback_data)]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                # ارسال تصویر با کپشن مناسب
-                caption_text = clean_text(f"🪄 پرامت تصویر ایجاد شده شما:\n\n{display_prompt}\n\n@platodex")
-                
-                message = await context.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=response.content,
-                    caption=caption_text,
-                    reply_markup=reply_markup,
-                    message_thread_id=thread_id,
-                    reply_to_message_id=update.message.message_id
-                )
-                context.user_data["last_image_message_id"] = message.message_id
-                context.user_data["original_message_id"] = update.message.message_id
-                
-                # اگر موفق شد از حلقه خارج می‌شویم
-                break
-                
-            elif response.status_code == 502:
-                # خطای 502، سعی مجدد
-                logger.warning(f"خطای 502 از API در تلاش {attempt + 1}. در حال تلاش مجدد...")
-                
-                # به کاربر اطلاع بدهیم که در حال تلاش مجدد هستیم
-                if attempt < max_retries - 1:  # اگر این آخرین تلاش نیست
-                    try:
-                        await context.bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=loading_message_id,
-                            text=clean_text(f"🖌️ خطای سرور (502)! تلاش مجدد {attempt + 2}/{max_retries}... لطفاً صبر کنید.")
-                        )
-                    except Exception as e:
-                        logger.warning(f"خطا در به‌روزرسانی پیام بارگذاری: {e}")
-                    
-                    # صبر قبل از تلاش بعدی
-                    await asyncio.sleep(retry_delay * (attempt + 1))
-                else:
-                    # این آخرین تلاش بود و باز هم شکست خورد
-                    raise Exception("همه تلاش‌ها با خطای 502 مواجه شدند.")
-                    
-            else:
-                # خطاهای دیگر
-                error_message = f"خطای {response.status_code} از API دریافت شد."
-                logger.error(error_message)
-                raise Exception(error_message)
-                
-        except asyncio.TimeoutError:
-            logger.warning(f"تایم‌اوت در تلاش {attempt + 1} برای تولید تصویر.")
-            
-            # به کاربر اطلاع بدهیم که تایم‌اوت رخ داده
-            if attempt < max_retries - 1:
-                try:
-                    await context.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=loading_message_id,
-                        text=clean_text(f"🖌️ تایم‌اوت! تلاش مجدد {attempt + 2}/{max_retries}... لطفاً صبر کنید.")
-                    )
-                except Exception as e:
-                    logger.warning(f"خطا در به‌روزرسانی پیام بارگذاری: {e}")
-                
-                await asyncio.sleep(retry_delay * (attempt + 1))
-            else:
-                # این آخرین تلاش بود و باز هم شکست خورد
-                raise Exception("همه تلاش‌ها با تایم‌اوت مواجه شدند.")
-                
-        except Exception as e:
-            # اگر این آخرین تلاش نیست، دوباره تلاش می‌کنیم
-            if attempt < max_retries - 1:
-                logger.warning(f"خطا در تلاش {attempt + 1}: {e}. در حال تلاش مجدد...")
-                
-                try:
-                    await context.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=loading_message_id,
-                        text=clean_text(f"🖌️ خطا رخ داد! تلاش مجدد {attempt + 2}/{max_retries}... لطفاً صبر کنید.")
-                    )
-                except Exception as edit_error:
-                    logger.warning(f"خطا در به‌روزرسانی پیام بارگذاری: {edit_error}")
-                
-                await asyncio.sleep(retry_delay * (attempt + 1))
-            else:
-                # اگر این آخرین تلاش بود، خطا را نمایش می‌دهیم
-                logger.error(f"همه تلاش‌ها برای تولید تصویر با خطا مواجه شدند: {e}")
-                raise
-    else:
-        # اگر از حلقه خارج شدیم بدون اینکه تصویر را با موفقیت ارسال کنیم
-        # این حالت زمانی رخ می‌دهد که همه تلاش‌ها شکست بخورند اما exception هم پرتاب نشود
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
-        except Exception as e:
-            logger.warning(f"خطا در حذف پیام بارگذاری پس از شکست همه تلاش‌ها: {e}")
-            
-        await update.message.reply_text(
-            clean_text("متأسفانه همه تلاش‌ها برای تولید تصویر با شکست مواجه شدند. لطفاً بعداً دوباره امتحان کنید."),
-            message_thread_id=thread_id
-        )
-            
-    # مدیریت خطا برای کل تابع
-    # این بخش فقط در صورتی اجرا می‌شود که exception از حلقه for بالا رها شود
-    try:
-        pass  # اینجا کاری انجام نمی‌دهیم، فقط برای مدیریت خطاهای احتمالی است
-    except Exception as e:
-        # خطای عمومی در پردازش درخواست
-        logger.error(f"خطای نهایی در تولید تصویر گروه: {e}")
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
-        except Exception as del_e:
-            logger.warning(f"خطا در حذف پیام بارگذاری: {del_e}")
-        
-        error_message = "خطایی رخ داد. لطفاً بعداً امتحان کنید."
-        if "502" in str(e):
-            error_message = "خطای سرور (502). پلتفرم تولید تصویر در حال حاضر در دسترس نیست، لطفاً بعداً امتحان کنید."
-        elif "timed out" in str(e).lower() or "timeout" in str(e).lower():
-            error_message = "زمان پاسخگویی API به پایان رسید. لطفاً با پرامپت کوتاه‌تر امتحان کنید یا بعداً تلاش کنید."
-        
-        await update.message.reply_text(
-            clean_text(error_message),
-            message_thread_id=thread_id
-        )
-
-async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.inline_query.query
-    if not query:
-        await update.inline_query.answer([])
-        return
-    results = []
-    for item in EXTRACTED_ITEMS:
-        if query.lower() in item["name"].lower() or query.lower() in item["category"].lower():
-            price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-            price_info = clean_text(f"{item['price']['value']} {price_type}")
-            result_content = (
-                f"🔖 نام: {item['name']}\n"
-                f"\n"
-                f"🗃 دسته‌بندی: {item['category']}\n"
-                f"📃 توضیحات: {item['description']}\n"
-                f"\n"
-                f"💸 قیمت: {price_info}\n"
-                f"📣 @platodex"
-            )
-            results.append(
-                InlineQueryResultArticle(
-                    id=item["id"],
-                    title=item["name"],
-                    description=f"{item['category']} - {price_info}",
-                    input_message_content=InputTextMessageContent(result_content),
-                    thumb_url=item["images"][0] if item["images"] else None
-                )
-            )
-    await update.inline_query.answer(results[:50])
-
-async def handle_inline_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message_text = update.message.text
-    item = next((i for i in EXTRACTED_ITEMS if i["name"] in message_text), None)
-    if not item:
-        return
-    
-    thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
-    price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-    price_info = clean_text(f"{item['price']['value']} {price_type}")
-    results_text = (
-        f"🔖 نام: {item['name']}\n"
-        f"\n"
-        f"🗃 دسته‌بندی: {item['category']}\n"
-        f"📃 توضیحات: {item['description']}\n"
-        f"\n"
-        f"💸 قیمت: {price_info}\n"
-        f"📣 @platodex"
-    )
-    
-    if item["images"]:
-        await update.message.reply_photo(
-            photo=item["images"][0],
-            caption=results_text,
-            message_thread_id=thread_id
-        )
-    else:
-        await update.message.reply_text(
-            results_text,
-            message_thread_id=thread_id
-        )
-    
-    for i, audio_info in enumerate(item["audios"], 1):
-        await send_audio(update, context, item, audio_info, i, None, thread_id)
-
-async def start_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    context.user_data.clear()
-    categories = sorted(set(item["category"] for item in EXTRACTED_ITEMS))
-    context.user_data["categories"] = categories
-    context.user_data["page"] = 0
-    keyboard = [
-        [InlineKeyboardButton("🔍 جست‌وجو با اسم", callback_data="search_by_name")],
-        [InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(
-        clean_text("🔍 می‌خوای آیتم‌ها رو چطوری پیدا کنی؟\nیا از دسته‌بندی‌ها انتخاب کن یا اسم آیتم رو بفرست!"),
-        reply_markup=reply_markup
-    )
-    await send_paginated_categories(update, context, is_group=False)
-    return SELECT_CATEGORY
-
-async def search_by_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(
-        clean_text("🔍 لطفاً اسم آیتم رو بفرست!"),
-        reply_markup=reply_markup
-    )
-    return SEARCH_ITEM
-
-async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message_id = update.message.message_id
-    async with PROCESSING_LOCK:
-        if message_id in PROCESSED_MESSAGES:
-            logger.warning(f"پیام تکراری در چت خصوصی با message_id: {message_id} - نادیده گرفته شد")
-            return SEARCH_ITEM
-        PROCESSED_MESSAGES.add(message_id)
-    
-    user_input = update.message.text.strip().lower()
-    matching_items = [item for item in EXTRACTED_ITEMS if user_input in item["name"].lower() or user_input in item["category"].lower()]
-    
-    if not matching_items:
-        keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
-        await update.message.reply_text(clean_text("هیچ آیتمی پیدا نشد! 😕"), reply_markup=InlineKeyboardMarkup(keyboard))
-        return SEARCH_ITEM
-    
-    context.user_data["matching_items"] = matching_items
-    context.user_data["page"] = 0
-    await send_paginated_items(update, context, is_group=False)
-    return SEARCH_ITEM
-
-async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYPE, is_group=False):
-    # Check if we have an explicitly saved group interaction state
-    is_group = is_group or context.user_data.get("is_group_interaction", False)
-    group_chat_id = context.user_data.get("group_chat_id", None)
-    group_thread_id = context.user_data.get("group_thread_id", None)
-    
-    matching_items = context.user_data.get("matching_items", [])
-    if not matching_items:
-        logger.warning("No matching items found in user_data")
-        if update.callback_query and update.callback_query.message:
-            keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
-            await update.callback_query.message.reply_text(
-                clean_text("هیچ آیتمی پیدا نشد! 😕"), 
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        return
-
-    # When returning from an item detail view, use the stored page number
-    if update.callback_query and "back_to_items" in update.callback_query.data:
-        page = context.user_data.get("previous_page", 0)
-        context.user_data["page"] = page
-    else:
-        page = context.user_data.get("page", 0)
-    
-    items_per_page = 10
-    total_pages = max(1, (len(matching_items) + items_per_page - 1) // items_per_page)
-    
-    # Ensure page is within valid range
-    page = max(0, min(page, total_pages - 1))
-    context.user_data["page"] = page
-    
-    start_idx = page * items_per_page
-    end_idx = min((page + 1) * items_per_page, len(matching_items))
-    current_items = matching_items[start_idx:end_idx]
-    
-    if len(matching_items) == 1 and not is_group:
-        item = matching_items[0]
-        price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-        price_info = clean_text(f"{item['price']['value']} {price_type}")
-        results_text = (
-            f"🔖 نام: {item['name']}\n"
-            f"\n"
-            f"🗃 دسته‌بندی: {item['category']}\n"
-            f"📃 توضیحات: {item['description']}\n"
-            f"\n"
-            f"💸 قیمت: {price_info}\n"
-            f"📣 @platodex"
-        )
-        keyboard = [[InlineKeyboardButton("↩️ برگشت به لیست آیتم‌ها", callback_data="back_to_items")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        try:
-            # Send item details directly
-            message = None
-            if update.message:
-                if item["images"]:
-                    message = await update.message.reply_photo(photo=item["images"][0], caption=results_text, reply_markup=reply_markup)
-                else:
-                    message = await update.message.reply_text(results_text, reply_markup=reply_markup)
-            elif update.callback_query and update.callback_query.message:
-                chat_id = update.callback_query.message.chat_id
-                if item["images"]:
-                    message = await context.bot.send_photo(
-                        chat_id=chat_id,
-                        photo=item["images"][0],
-                        caption=results_text,
-                        reply_markup=reply_markup
-                    )
-                else:
-                    message = await context.bot.send_message(
-                        chat_id=chat_id,
-                        text=results_text,
-                        reply_markup=reply_markup
-                    )
-            
-            if message:
-                context.user_data["current_item_message_id"] = message.message_id
-                for i, audio_info in enumerate(item["audios"], 1):
-                    await send_audio(update, context, item, audio_info, i, reply_markup)
-        except Exception as e:
-            logger.error(f"Error sending single item: {e}")
-            
-        return
-    
-    # Building keyboard with items
-    keyboard = []
-    for i, item in enumerate(current_items, start_idx + 1):
-        price_type = "Pips" if item["price"]["type"] == "premium" else item["price"]["type"]
-        price_info = clean_text(f"{item['price']['value']} {price_type}")
-        button_text = clean_text(f"{i}. {item['name']} - {price_info}")
-        # Always include group flag in the callback data for consistency 
-        callback_data = f"{'select_group_item' if is_group else 'select_item'}_{item['id']}"
-        keyboard.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
-    
-    # Navigation buttons
-    nav_buttons = []
-    if page > 0:
-        # Include group flag consistently in pagination callbacks
-        nav_buttons.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"prev_page_{'group' if is_group else 'private'}"))
-    if page < total_pages - 1:
-        nav_buttons.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"next_page_{'group' if is_group else 'private'}"))
-    if nav_buttons:
-        keyboard.append(nav_buttons)
-    
-    # Add back to categories button for group chats
-    if is_group:
-        keyboard.append([InlineKeyboardButton("🔙 برگشت به دسته‌بندی‌ها", callback_data="back_to_categories_group")])
-    elif not is_group:
-        keyboard.append([InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    message_text = clean_text(f"این آیتم‌ها رو پیدا کردم (صفحه {page + 1} از {total_pages})، کدوم رو می‌خوای؟ 👇")
-    
-    try:
-        if is_group and update.message:
-            # Handle original group command
-            thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
-            message = await update.message.reply_text(message_text, reply_markup=reply_markup, message_thread_id=thread_id)
-            context.user_data["items_list_message_id"] = message.message_id
-            logger.info(f"Sent items list page {page+1}/{total_pages} in group")
-        elif is_group and update.callback_query:
-            # Handle group callback (pagination/selection)
-            thread_id = group_thread_id
-            
-            # For group callbacks, send a new message instead of editing
-            chat_id = update.callback_query.message.chat_id
-            try:
-                message = await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=message_text,
-                    reply_markup=reply_markup,
-                    message_thread_id=thread_id
-                )
-                context.user_data["items_list_message_id"] = message.message_id
-                logger.info(f"Sent new items list page {page+1}/{total_pages} in group after pagination")
-                
-                # Try to delete the previous message to keep the chat clean
-                try:
-                    await context.bot.delete_message(
-                        chat_id=chat_id, 
-                        message_id=update.callback_query.message.message_id
-                    )
-                except Exception as e:
-                    logger.warning(f"Could not delete previous message in group: {e}")
-            except Exception as e:
-                logger.error(f"Error sending new message in group: {e}")
-                # Fallback to trying to edit the message
-                try:
-                    await update.callback_query.message.edit_text(
-                        text=message_text,
-                        reply_markup=reply_markup
-                    )
-                except Exception as edit_error:
-                    logger.error(f"Error editing message in group: {edit_error}")
-        elif update.callback_query and "back_to_items" in update.callback_query.data:
-            # When coming back from item details, always send a new message
-            message = await context.bot.send_message(
-                chat_id=update.callback_query.message.chat_id,
-                text=message_text,
-                reply_markup=reply_markup
-            )
-            context.user_data["items_list_message_id"] = message.message_id
-        elif update.callback_query:
-            try:
-                # Try to edit existing message
-                await update.callback_query.message.edit_text(message_text, reply_markup=reply_markup)
-                context.user_data["items_list_message_id"] = update.callback_query.message.message_id
-            except error.BadRequest as e:
-                # If editing fails, send a new message
-                if "Message to edit not found" in str(e) or "There is no text in the message to edit" in str(e):
-                    logger.warning(f"Could not edit message, sending new one: {e}")
-                    message = await context.bot.send_message(
-                        chat_id=update.callback_query.message.chat_id,
-                        text=message_text,
-                        reply_markup=reply_markup
-                    )
-                    context.user_data["items_list_message_id"] = message.message_id
-                else:
-                    # For other errors, re-raise
-                    raise
-        else:
-            message = await update.message.reply_text(message_text, reply_markup=reply_markup)
-            context.user_data["items_list_message_id"] = message.message_id
-    except Exception as e:
-        # Last resort error handling
-        logger.error(f"Error in send_paginated_items: {e}")
-        try:
-            chat_id = None
-            if update.callback_query and update.callback_query.message:
-                chat_id = update.callback_query.message.chat_id
-            elif update.message:
-                chat_id = update.message.chat_id
-            
-            if chat_id:
-                thread_id = group_thread_id if is_group else None
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=clean_text("مشکلی در نمایش آیتم‌ها پیش آمد. لطفاً دوباره امتحان کنید."),
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]),
-                    message_thread_id=thread_id
-                )
-        except Exception:
-            pass  # If even this fails, just silently give up
-
-async def send_audio(update: Update, context: ContextTypes.DEFAULT_TYPE, item, audio_info, index, reply_markup=None, thread_id=None):
+                    # صبر قبل از...(truncated 29692 characters)...hread_id=None):
     audio_url = audio_info["uri"]
     audio_type = audio_info.get("type", "unknown")
     base_url = "https://game-assets-prod.platocdn.com/"
@@ -2698,7 +2120,8 @@ async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Run App 📱", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
         [InlineKeyboardButton("Search Items 🔍", callback_data="search_items")],
         [InlineKeyboardButton("Chat with AI 🤖", callback_data="chat_with_ai")],
-        [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")]
+        [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")],
+        [InlineKeyboardButton("ابزار 🔧", callback_data="tools")]
     ]
     await query.edit_message_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
@@ -2827,12 +2250,34 @@ async def main():
                 persistent=False
             )
 
+            tools_conv_handler = ConversationHandler(
+                entry_points=[
+                    CallbackQueryHandler(start_tools, pattern="^tools$")
+                ],
+                states={
+                    TOOLS_MENU: [
+                        CallbackQueryHandler(start_remove_bg, pattern="^remove_bg$")
+                    ],
+                    REMOVE_BG: [
+                        MessageHandler(filters.TEXT & ~filters.COMMAND, process_remove_bg)
+                    ]
+                },
+                fallbacks=[
+                    CommandHandler("cancel", cancel),
+                    CommandHandler("start", start),
+                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
+                ],
+                name="tools",
+                persistent=False
+            )
+
             application.add_handler(CommandHandler("start", start))
             application.add_handler(CommandHandler("cancel", cancel))
             application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
             application.add_handler(search_conv_handler)
             application.add_handler(image_conv_handler)
             application.add_handler(group_image_conv_handler)
+            application.add_handler(tools_conv_handler)
             application.add_handler(InlineQueryHandler(inline_query))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r'^@platodex\s+\w+'), handle_inline_selection))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))

@@ -882,11 +882,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• آیتم‌ها رو ببین 🎲\n• رتبه‌بندی بازیکن‌ها رو چک کن 🏆\n• اخبار رو دنبال کن 🎯"
     )
     keyboard = [
-        [InlineKeyboardButton("Run App 📱", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
-        [InlineKeyboardButton("Search Items 🔍", callback_data="search_items")],
-        [InlineKeyboardButton("Chat with AI 🤖", callback_data="chat_with_ai")],
-        [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")],
-        [InlineKeyboardButton("ابزارها 🔧", callback_data="tools_menu")]
+        [InlineKeyboardButton("📱 اجرا مینی اپ", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
+        [
+            InlineKeyboardButton("🔍 سرچ آیتم", callback_data="search_items"),
+            InlineKeyboardButton("🤖 چت با هوش مصنوعی", callback_data="chat_with_ai")
+        ],
+        [InlineKeyboardButton("🔧 ابزارها", callback_data="tools_menu")]
     ]
     await update.message.reply_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
@@ -2698,12 +2699,36 @@ async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🏠 به منوی اصلی خوش اومدی!\n\nچی دوست داری انجام بدیم؟ 😎"
     )
     keyboard = [
-        [InlineKeyboardButton("Run App 📱", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
-        [InlineKeyboardButton("Search Items 🔍", callback_data="search_items")],
-        [InlineKeyboardButton("Chat with AI 🤖", callback_data="chat_with_ai")],
-        [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")],
-        [InlineKeyboardButton("ابزارها 🔧", callback_data="tools_menu")]
+        [InlineKeyboardButton("📱 اجرا مینی اپ", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
+        [
+            InlineKeyboardButton("🔍 سرچ آیتم", callback_data="search_items"),
+            InlineKeyboardButton("🤖 چت با هوش مصنوعی", callback_data="chat_with_ai")
+        ],
+        [InlineKeyboardButton("🔧 ابزارها", callback_data="tools_menu")]
     ]
+    await query.edit_message_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
+    return ConversationHandler.END
+
+async def back_to_home_from_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """بازگشت به خانه بدون پاک کردن عکس"""
+    query = update.callback_query
+    await query.answer()
+    user_id = update.effective_user.id
+    if user_id in AI_CHAT_USERS:
+        AI_CHAT_USERS.remove(user_id)
+    context.user_data.clear()
+    welcome_message = clean_text(
+        "🏠 به منوی اصلی خوش اومدی!\n\nچی دوست داری انجام بدیم؟ 😎"
+    )
+    keyboard = [
+        [InlineKeyboardButton("📱 اجرا مینی اپ", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
+        [
+            InlineKeyboardButton("🔍 سرچ آیتم", callback_data="search_items"),
+            InlineKeyboardButton("🤖 چت با هوش مصنوعی", callback_data="chat_with_ai")
+        ],
+        [InlineKeyboardButton("🔧 ابزارها", callback_data="tools_menu")]
+    ]
+    # فقط پیام دکمه رو ویرایش می‌کنیم، عکس‌ها رو نمی‌پاکیم
     await query.edit_message_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
 
@@ -2712,7 +2737,8 @@ async def tools_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     keyboard = [
-        [InlineKeyboardButton("حذف بک‌گراند عکس 🖼️", callback_data="remove_background")],
+        [InlineKeyboardButton("🎨 ساخت عکس با هوش مصنوعی", callback_data="generate_image")],
+        [InlineKeyboardButton("🖼️ حذف بک‌گراند عکس", callback_data="remove_background")],
         [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
     ]
     await query.edit_message_text(
@@ -2864,18 +2890,17 @@ async def handle_photo_for_background_removal(update: Update, context: ContextTy
             
             keyboard = [
                 [InlineKeyboardButton("🔄 عکس دیگه", callback_data="remove_background")],
-                [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
+                [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home_from_result")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            # ارسال عکس به صورت فایل
+            # ارسال عکس به صورت فایل (بدون دکمه)
             await update.message.reply_document(
                 document=InputFile(processed_image, filename="no_background.png"),
-                caption=clean_text("✅ بک‌گراند عکس با موفقیت حذف شد!"),
-                reply_markup=reply_markup
+                caption=clean_text("✅ بک‌گراند عکس با موفقیت حذف شد!")
             )
             
-            # ارسال عکس به صورت عکس (برای پیش‌نمایش)
+            # ارسال عکس به صورت عکس (برای پیش‌نمایش) با دکمه‌ها
             processed_image.seek(0)  # بازگشت به ابتدای فایل
             await update.message.reply_photo(
                 photo=InputFile(processed_image, filename="no_background.png"),
@@ -3050,11 +3075,12 @@ async def main():
                 name="remove_background",
                 persistent=False
             )
-
+            
             application.add_handler(CommandHandler("start", start))
             application.add_handler(CommandHandler("cancel", cancel))
             application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
             application.add_handler(CallbackQueryHandler(tools_menu, pattern="^tools_menu$"))
+            application.add_handler(CallbackQueryHandler(back_to_home_from_result, pattern="^back_to_home_from_result$"))
             application.add_handler(search_conv_handler)
             application.add_handler(image_conv_handler)
             application.add_handler(group_image_conv_handler)

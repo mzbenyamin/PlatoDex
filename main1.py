@@ -54,9 +54,10 @@ def generate_safe_callback_data(prompt):
     return f"regenerate_image_{callback_id}"
 
 SYSTEM_MESSAGE = (
-    "شما دستیار هوشمند PlatBot درمورد پلاتو به کاربران کمک میکنید با ایموجی صحبت میکنید"
-    "خیلی کوتاه جواب میدی و مففید"
-    "به صورت نسل Z صحبت میکنی و دوستانه و جذاب و با کمی شوخی و از ایموجی استفاده کن"
+    "شما دستیار هوشمند PatoBot هستی که به کاربران کمک می‌کنی که از اپلیکیشن Plato مشکلی داشتند کمکشون کنی. "
+    "خیلی کوتاه صحبت کن، اگر نیاز بود توضیح بده. به صورت خلاصه و خودمونی به سبک نسل Z صحبت کن. "
+    "با ایموجی صحبت می‌کنی، خیلی کوتاه جواب میدی و مفید. "
+    "به صورت نسل Z صحبت می‌کنی و دوستانه و جذاب و با کمی شوخی و از ایموجی استفاده کن. "
     "به سوالات کاربر در مورد آیتم‌ها جواب بدی و راهنمایی کنی چطور با دستور /i مشخصات کامل رو بگیرن\\. "
     "حذف اکانت\n"
     "چطور اکانتمو حذف کنم؟\nبرای حذف اکانت این مراحل رو برو:\n"
@@ -2584,9 +2585,9 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Build a short prompt - only send user message to avoid URI too long error
     # Include user name if available
     if user_fullname:
-        prompt = f"کاربر {user_fullname} می‌پرسد: {user_message}\n\nشما دستیار هوشمند platodex هستید و درمورد پلاتو به کاربران کمک می‌کنید. با ایموجی و به صورت خودمونی و طنز جواب بده."
+        prompt = f"کاربر {user_fullname} می‌پرسد: {user_message}\n\nشما دستیار هوشمند PatoBot هستی که به کاربران کمک می‌کنی که از اپلیکیشن Plato مشکلی داشتند کمکشون کنی. خیلی کوتاه صحبت کن، اگر نیاز بود توضیح بده.ایموجی و به صورت خودمونی و طنز جواب بده، به صورت خلاصه و خودمونی به سبک نسل Z صحبت کن."
     else:
-        prompt = f"سوال: {user_message}\n\nشما دستیار هوشمند platodex هستید و درمورد پلاتو به کاربران کمک می‌کنید. با ایموجی و به صورت خودمونی و طنز جواب بده."
+        prompt = f"سوال: {user_message}\n\nشما دستیار هوشمند PatoBot هستی که به کاربران کمک می‌کنی که از اپلیکیشن Plato مشکلی داشتند کمکشون کنی. خیلی کوتاه صحبت کن،ایموجی و به صورت خودمونی و طنز جواب بده، اگر نیاز بود توضیح بده. به صورت خلاصه و خودمونی به سبک نسل Z صحبت کن."
     
     chat_history.append({"role": "user", "content": user_message})
     context.user_data["chat_history"] = chat_history
@@ -2690,9 +2691,9 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     # Build a short prompt - only send user message to avoid URI too long error
     # Include user name if available
     if user_fullname:
-        prompt = f"کاربر {user_fullname} می‌پرسد: {user_message}\n\nشما دستیار هوشمند platodex هستید و درمورد پلاتو به کاربران کمک می‌کنید. با ایموجی و به صورت خودمونی و طنز جواب بده."
+        prompt = f"کاربر {user_fullname} می‌پرسد: {user_message}\n\nشما دستیار هوشمند PatoBot هستی که به کاربران کمک می‌کنی که از اپلیکیشن Plato مشکلی داشتند کمکشون کنی. خیلی کوتاه صحبت کن، اگر نیاز بود توضیح بده. به صورت خلاصه و خودمونی به سبک نسل Z صحبت کن."
     else:
-        prompt = f"سوال: {user_message}\n\nشما دستیار هوشمند platodex هستید و درمورد پلاتو به کاربران کمک می‌کنید. با ایموجی و به صورت خودمونی و طنز جواب بده."
+        prompt = f"سوال: {user_message}\n\nشما دستیار هوشمند PatoBot هستی که به کاربران کمک می‌کنی که از اپلیکیشن Plato مشکلی داشتند کمکشون کنی. خیلی کوتاه صحبت کن، اگر نیاز بود توضیح بده. به صورت خلاصه و خودمونی به سبک نسل Z صحبت کن."
     
     try:
         response = requests.get(
@@ -3173,12 +3174,15 @@ async def main():
                 persistent=False
             )
             
-            application.add_handler(CommandHandler("start", start))
-            application.add_handler(CommandHandler("cancel", cancel))
-            application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
-            application.add_handler(CallbackQueryHandler(tools_menu, pattern="^tools_menu$"))
+            # Handler های ساده باید قبل از ConversationHandler ها باشن
+            application.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
             application.add_handler(CallbackQueryHandler(back_to_home_from_result, pattern="^back_to_home_from_result$"))
             application.add_handler(CallbackQueryHandler(regenerate_same_prompt, pattern="^regenerate_same_prompt$"))
+            application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
+            application.add_handler(CallbackQueryHandler(tools_menu, pattern="^tools_menu$"))
+            
+            application.add_handler(CommandHandler("start", start))
+            application.add_handler(CommandHandler("cancel", cancel))
             application.add_handler(search_conv_handler)
             application.add_handler(image_conv_handler)
             application.add_handler(group_image_conv_handler)

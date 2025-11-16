@@ -8,6 +8,7 @@ import html
 import logging
 import asyncio
 import time
+from urllib.parse import quote
 from fastapi import FastAPI, Request
 from PIL import Image
 import io
@@ -37,6 +38,7 @@ EXTRACTED_ITEMS = []
 AI_CHAT_USERS = set()
 SEARCH_ITEM, SELECT_CATEGORY = range(2)
 SELECT_SIZE, GET_PROMPT = range(2, 4)
+WAIT_FOR_PHOTO = 4
 DEFAULT_CHAT_ID = 789912945
 PROCESSED_MESSAGES = set()
 PROCESSING_LOCK = asyncio.Lock()  # تغییر به asyncio.Lock
@@ -883,7 +885,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Run App 📱", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
         [InlineKeyboardButton("Search Items 🔍", callback_data="search_items")],
         [InlineKeyboardButton("Chat with AI 🤖", callback_data="chat_with_ai")],
-        [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")]
+        [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")],
+        [InlineKeyboardButton("ابزارها 🔧", callback_data="tools_menu")]
     ]
     await update.message.reply_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
@@ -2698,9 +2701,129 @@ async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Run App 📱", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
         [InlineKeyboardButton("Search Items 🔍", callback_data="search_items")],
         [InlineKeyboardButton("Chat with AI 🤖", callback_data="chat_with_ai")],
-        [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")]
+        [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")],
+        [InlineKeyboardButton("ابزارها 🔧", callback_data="tools_menu")]
     ]
     await query.edit_message_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
+    return ConversationHandler.END
+
+async def tools_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """نمایش منوی ابزارها"""
+    query = update.callback_query
+    await query.answer()
+    keyboard = [
+        [InlineKeyboardButton("حذف بک‌گراند عکس 🖼️", callback_data="remove_background")],
+        [InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]
+    ]
+    await query.edit_message_text(
+        clean_text("🔧 منوی ابزارها\n\nیکی از ابزارها رو انتخاب کن:"),
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def start_remove_background(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """شروع فرآیند حذف بک‌گراند"""
+    query = update.callback_query
+    await query.answer()
+    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+    await query.edit_message_text(
+        clean_text("🖼️ حذف بک‌گراند عکس\n\nلطفاً عکسی که می‌خوای بک‌گراندش حذف بشه رو بفرست:"),
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return WAIT_FOR_PHOTO
+
+async def handle_photo_for_background_removal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دریافت و پردازش عکس برای حذف بک‌گراند"""
+    if not update.message:
+        return WAIT_FOR_PHOTO
+    
+    # بررسی اینکه آیا عکس به صورت photo یا document فرستاده شده
+    photo = None
+    if update.message.photo:
+        # دریافت بزرگترین سایز عکس
+        photo = update.message.photo[-1]
+    elif update.message.document and update.message.document.mime_type and update.message.document.mime_type.startswith('image/'):
+        # اگر عکس به صورت document فرستاده شده
+        photo = update.message.document
+    
+    if not photo:
+        await update.message.reply_text(clean_text("لطفاً یک عکس بفرست!"))
+        return WAIT_FOR_PHOTO
+    
+    loading_message = await update.message.reply_text(clean_text("⏳ در حال پردازش عکس... لطفاً صبر کنید."))
+    
+    try:
+        # دریافت فایل عکس از تلگرام
+        file = await context.bot.get_file(photo.file_id)
+        
+        # دانلود عکس
+        photo_url = file.file_path
+        # ساخت URL کامل برای فایل تلگرام
+        file_url = f"https://api.telegram.org/file/bot{TOKEN}/{photo_url}"
+        
+        # URL encode کردن آدرس فایل
+        encoded_url = quote(file_url, safe='')
+        
+        # فراخوانی API برای حذف بک‌گراند
+        api_url = f"https://api.majidapi.ir/image/remove-background?url={encoded_url}&out=photo&token={MAJID_AI_TOKEN}"
+        
+        response = requests.get(api_url, timeout=60)
+        
+        if response.status_code == 200:
+            # حذف پیام لودینگ
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=loading_message.message_id
+            )
+            
+            # ذخیره عکس پردازش شده
+            processed_image = io.BytesIO(response.content)
+            processed_image.name = "no_background.png"
+            
+            keyboard = [
+                [InlineKeyboardButton("🔄 عکس دیگه", callback_data="remove_background")],
+                [InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # ارسال عکس به صورت فایل
+            await update.message.reply_document(
+                document=InputFile(processed_image, filename="no_background.png"),
+                caption=clean_text("✅ بک‌گراند عکس با موفقیت حذف شد!"),
+                reply_markup=reply_markup
+            )
+            
+            # ارسال عکس به صورت عکس (برای پیش‌نمایش)
+            processed_image.seek(0)  # بازگشت به ابتدای فایل
+            await update.message.reply_photo(
+                photo=InputFile(processed_image, filename="no_background.png"),
+                caption=clean_text("📷 پیش‌نمایش:"),
+                reply_markup=reply_markup
+            )
+        else:
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=loading_message.message_id
+            )
+            keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+            await update.message.reply_text(
+                clean_text("❌ مشکلی در پردازش عکس پیش آمد. لطفاً دوباره امتحان کنید."),
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+    except Exception as e:
+        logger.error(f"خطا در حذف بک‌گراند: {e}")
+        try:
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=loading_message.message_id
+            )
+        except:
+            pass
+        keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+        await update.message.reply_text(
+            clean_text("❌ خطایی رخ داد. لطفاً بعداً امتحان کنید."),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
     return ConversationHandler.END
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2827,12 +2950,32 @@ async def main():
                 persistent=False
             )
 
+            remove_background_conv_handler = ConversationHandler(
+                entry_points=[
+                    CallbackQueryHandler(start_remove_background, pattern="^remove_background$")
+                ],
+                states={
+                    WAIT_FOR_PHOTO: [
+                        MessageHandler(filters.PHOTO | (filters.Document.IMAGE), handle_photo_for_background_removal)
+                    ]
+                },
+                fallbacks=[
+                    CommandHandler("cancel", cancel),
+                    CommandHandler("start", start),
+                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
+                ],
+                name="remove_background",
+                persistent=False
+            )
+
             application.add_handler(CommandHandler("start", start))
             application.add_handler(CommandHandler("cancel", cancel))
             application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
+            application.add_handler(CallbackQueryHandler(tools_menu, pattern="^tools_menu$"))
             application.add_handler(search_conv_handler)
             application.add_handler(image_conv_handler)
             application.add_handler(group_image_conv_handler)
+            application.add_handler(remove_background_conv_handler)
             application.add_handler(InlineQueryHandler(inline_query))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r'^@platodex\s+\w+'), handle_inline_selection))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))

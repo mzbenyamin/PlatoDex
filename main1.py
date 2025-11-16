@@ -878,8 +878,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     user_name = update.message.from_user.first_name
     welcome_message = clean_text(
-        f"سلام {user_name}!\nبه platodex خوش اومدی - مرکز بازی‌های Plato!\n"
-        "• آیتم‌ها رو ببین 🎲\n• رتبه‌بندی بازیکن‌ها رو چک کن 🏆\n• اخبار رو دنبال کن 🎯"
+        f"👋 سلام {user_name}!\n\n"
+        "🎮 به Platodex خوش اومدی! یه ربات کامل برای همه چیز پلاتو 🚀\n\n"
+        "✨ امکانات ربات:\n"
+        "🔍 جستجوی سریع آیتم‌ها و مشاهده جزئیات\n"
+        "🤖 چت هوشمند با هوش مصنوعی\n"
+        "🎨 ساخت عکس با هوش مصنوعی\n"
+        "🖼️ حذف بک‌گراند عکس\n"
+        "📱 مینی اپلیکیشن تعاملی\n\n"
+        "چی می‌خوای شروع کنیم؟ 😎"
     )
     keyboard = [
         [InlineKeyboardButton("📱 اجرا مینی اپ", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
@@ -2696,7 +2703,13 @@ async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
         AI_CHAT_USERS.remove(user_id)
     context.user_data.clear()
     welcome_message = clean_text(
-        "🏠 به منوی اصلی خوش اومدی!\n\nچی دوست داری انجام بدیم؟ 😎"
+        "🏠 به منوی اصلی برگشتی!\n\n"
+        "✨ چی می‌خوای انجام بدیم؟\n\n"
+        "🔍 سرچ آیتم‌ها\n"
+        "🤖 چت با هوش مصنوعی\n"
+        "🔧 ابزارهای کاربردی\n"
+        "📱 مینی اپلیکیشن\n\n"
+        "یکی رو انتخاب کن 👇"
     )
     keyboard = [
         [InlineKeyboardButton("📱 اجرا مینی اپ", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
@@ -2718,7 +2731,13 @@ async def back_to_home_from_result(update: Update, context: ContextTypes.DEFAULT
         AI_CHAT_USERS.remove(user_id)
     context.user_data.clear()
     welcome_message = clean_text(
-        "🏠 به منوی اصلی خوش اومدی!\n\nچی دوست داری انجام بدیم؟ 😎"
+        "🏠 به منوی اصلی برگشتی!\n\n"
+        "✨ چی می‌خوای انجام بدیم؟\n\n"
+        "🔍 سرچ آیتم‌ها\n"
+        "🤖 چت با هوش مصنوعی\n"
+        "🔧 ابزارهای کاربردی\n"
+        "📱 مینی اپلیکیشن\n\n"
+        "یکی رو انتخاب کن 👇"
     )
     keyboard = [
         [InlineKeyboardButton("📱 اجرا مینی اپ", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],

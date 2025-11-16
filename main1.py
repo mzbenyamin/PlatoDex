@@ -907,7 +907,7 @@ async def start_generate_image(update: Update, context: ContextTypes.DEFAULT_TYP
         [InlineKeyboardButton("512x512", callback_data="size_512x512")],
         [InlineKeyboardButton("1024x1024", callback_data="size_1024x1024")],
         [InlineKeyboardButton("1280x720", callback_data="size_1280x720")],
-        [InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]
+        [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
@@ -929,7 +929,7 @@ async def select_size(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif size == "size_1280x720":
         context.user_data["width"] = 1280
         context.user_data["height"] = 720
-    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+    keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
         clean_text(f"سایز تصویر انتخاب شد: {context.user_data['width']}x{context.user_data['height']}\n\nلطفاً توضیحات تصویر (پرامپت) را وارد کنید. مثلاً: 'A cat in a forest'"),
@@ -943,11 +943,13 @@ async def get_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(clean_text("لطفاً یک توضیح برای تصویر وارد کنید!"))
         return GET_PROMPT
     
+    # ذخیره prompt برای استفاده مجدد
+    context.user_data["last_prompt"] = prompt
     width = context.user_data["width"]
     height = context.user_data["height"]
     seed = random.randint(1, 999999)
     
-    loading_message = await update.message.reply_text(clean_text("🖌️ در حال طراحی عکس... لطفاً صبر کنید."))
+    loading_message = await update.message.reply_text(clean_text("⏳"))
     
     api_url = f"{IMAGE_API_URL}{prompt}?width={width}&height={height}&nologo=true&seed={seed}"
     try:
@@ -955,8 +957,11 @@ async def get_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if response.status_code == 200:
             await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
             keyboard = [
-                [InlineKeyboardButton("↩️ برگشت", callback_data="retry_generate_image")],
-                [InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]
+                [
+                    InlineKeyboardButton("🔄 عکس دیگه", callback_data="retry_generate_image"),
+                    InlineKeyboardButton("🎨 ساخت مجدد", callback_data="regenerate_same_prompt")
+                ],
+                [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_photo(photo=response.content, reply_markup=reply_markup)
@@ -973,18 +978,67 @@ async def get_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def retry_generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    # پاک کردن prompt قبلی برای عکس جدید
+    context.user_data.pop("last_prompt", None)
     keyboard = [
         [InlineKeyboardButton("512x512", callback_data="size_512x512")],
         [InlineKeyboardButton("1024x1024", callback_data="size_1024x1024")],
         [InlineKeyboardButton("1280x720", callback_data="size_1280x720")],
-        [InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]
+        [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(
-        clean_text("🖼️ Generate Image Mode Activated!\n\nلطفاً سایز تصویر مورد نظر خود را انتخاب کنید:"),
-        reply_markup=reply_markup
-    )
+    try:
+        await query.edit_message_text(
+            clean_text("🖼️ Generate Image Mode Activated!\n\nلطفاً سایز تصویر مورد نظر خود را انتخاب کنید:"),
+            reply_markup=reply_markup
+        )
+    except Exception:
+        await query.message.reply_text(
+            clean_text("🖼️ Generate Image Mode Activated!\n\nلطفاً سایز تصویر مورد نظر خود را انتخاب کنید:"),
+            reply_markup=reply_markup
+        )
     return SELECT_SIZE
+
+async def regenerate_same_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ساخت مجدد عکس با همان prompt"""
+    query = update.callback_query
+    await query.answer()
+    
+    # بررسی وجود prompt قبلی
+    if "last_prompt" not in context.user_data:
+        await query.message.reply_text(clean_text("❌ متأسفانه prompt قبلی پیدا نشد. لطفاً دوباره عکس بسازید."))
+        return ConversationHandler.END
+    
+    prompt = context.user_data["last_prompt"]
+    width = context.user_data.get("width", 512)
+    height = context.user_data.get("height", 512)
+    seed = random.randint(1, 999999)
+    
+    loading_message = await query.message.reply_text(clean_text("⏳"))
+    
+    api_url = f"{IMAGE_API_URL}{prompt}?width={width}&height={height}&nologo=true&seed={seed}"
+    try:
+        response = requests.get(api_url, timeout=30)
+        if response.status_code == 200:
+            await context.bot.delete_message(chat_id=query.message.chat_id, message_id=loading_message.message_id)
+            keyboard = [
+                [
+                    InlineKeyboardButton("🔄 عکس دیگه", callback_data="retry_generate_image"),
+                    InlineKeyboardButton("🎨 ساخت مجدد", callback_data="regenerate_same_prompt")
+                ],
+                [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.message.reply_photo(photo=response.content, reply_markup=reply_markup)
+        else:
+            await context.bot.delete_message(chat_id=query.message.chat_id, message_id=loading_message.message_id)
+            await query.message.reply_text(clean_text("❌ مشکلی در تولید تصویر پیش آمد. لطفاً دوباره امتحان کنید."))
+    except Exception as e:
+        await context.bot.delete_message(chat_id=query.message.chat_id, message_id=loading_message.message_id)
+        await query.message.reply_text(clean_text("❌ خطایی رخ داد. لطفاً بعداً امتحان کنید."))
+        logger.error(f"خطا در ساخت مجدد تصویر: {e}")
+    
+    return ConversationHandler.END
 
 async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1504,7 +1558,7 @@ async def start_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["page"] = 0
     keyboard = [
         [InlineKeyboardButton("🔍 جست‌وجو با اسم", callback_data="search_by_name")],
-        [InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]
+        [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
@@ -1517,7 +1571,7 @@ async def start_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def search_by_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+    keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
         clean_text("🔍 لطفاً اسم آیتم رو بفرست!"),
@@ -1537,7 +1591,7 @@ async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE
     matching_items = [item for item in EXTRACTED_ITEMS if user_input in item["name"].lower() or user_input in item["category"].lower()]
     
     if not matching_items:
-        keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+        keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
         await update.message.reply_text(clean_text("هیچ آیتمی پیدا نشد! 😕"), reply_markup=InlineKeyboardMarkup(keyboard))
         return SEARCH_ITEM
     
@@ -1556,7 +1610,7 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
     if not matching_items:
         logger.warning("No matching items found in user_data")
         if update.callback_query and update.callback_query.message:
-            keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+            keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
             await update.callback_query.message.reply_text(
                 clean_text("هیچ آیتمی پیدا نشد! 😕"), 
                 reply_markup=InlineKeyboardMarkup(keyboard)
@@ -1654,7 +1708,7 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
     if is_group:
         keyboard.append([InlineKeyboardButton("🔙 برگشت به دسته‌بندی‌ها", callback_data="back_to_categories_group")])
     elif not is_group:
-        keyboard.append([InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")])
+        keyboard.append([InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     message_text = clean_text(f"این آیتم‌ها رو پیدا کردم (صفحه {page + 1} از {total_pages})، کدوم رو می‌خوای؟ 👇")
@@ -1744,7 +1798,7 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text=clean_text("مشکلی در نمایش آیتم‌ها پیش آمد. لطفاً دوباره امتحان کنید."),
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]),
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]),
                     message_thread_id=thread_id
                 )
         except Exception:
@@ -1856,7 +1910,7 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in select_item: {e}")
         try:
             # Fallback message if everything else fails
-            keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+            keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=clean_text("مشکلی در نمایش جزئیات آیتم پیش آمد. لطفاً دوباره امتحان کنید."),
@@ -1902,7 +1956,7 @@ async def back_to_items(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
         else:
             # If there are no matching items in user_data, go back to home
-            keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+            keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=clean_text("متأسفانه لیست آیتم‌ها از دست رفته است. به منوی اصلی برگردید."),
@@ -1912,7 +1966,7 @@ async def back_to_items(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in back_to_items: {e}")
         try:
             # Fallback message if everything else fails
-            keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+            keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=clean_text("مشکلی در بازگشت به لیست آیتم‌ها پیش آمد. لطفاً دوباره امتحان کنید."),
@@ -2008,7 +2062,7 @@ async def send_paginated_categories(update: Update, context: ContextTypes.DEFAUL
     if not categories:
         logger.warning("No categories found in user_data")
         if update.callback_query and update.callback_query.message:
-            keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+            keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
             await update.callback_query.message.reply_text(
                 clean_text("هیچ دسته‌بندی پیدا نشد! 😕"), 
                 reply_markup=InlineKeyboardMarkup(keyboard)
@@ -2048,7 +2102,7 @@ async def send_paginated_categories(update: Update, context: ContextTypes.DEFAUL
     if is_group:
         keyboard.append([InlineKeyboardButton("🔙 برگشت به دسته‌بندی‌ها", callback_data="back_to_categories_group")])
     elif not is_group:
-        keyboard.append([InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")])
+        keyboard.append([InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     message_text = clean_text(f"دسته‌بندی‌ها (صفحه {page + 1} از {total_pages})، کدوم رو می‌خوای؟ 👇")
@@ -2152,7 +2206,7 @@ async def send_paginated_categories(update: Update, context: ContextTypes.DEFAUL
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text=clean_text("مشکلی در نمایش دسته‌بندی‌ها پیش آمد. لطفاً دوباره امتحان کنید."),
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]])
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]])
                 )
         except Exception:
             pass  # If even this fails, just silently give up
@@ -2488,7 +2542,7 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
             thread_id = context.user_data.get("group_thread_id") if is_group else None
             await update.callback_query.message.reply_text(
                 clean_text("مشکلی در تغییر صفحه پیش آمد. لطفاً دوباره امتحان کنید."),
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]),
                 message_thread_id=thread_id
             )
         return SELECT_CATEGORY if "_categories" in query.data else SEARCH_ITEM
@@ -2501,12 +2555,18 @@ async def chat_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["mode"] = "ai_chat"
     context.user_data["chat_history"] = []
-    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+    keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(
-        clean_text("🤖 چت با هوش مصنوعی فعال شد!\n\nهر چی می‌خوای بگو، من یادم می‌مونه چی گفتی! 😎"),
-        reply_markup=reply_markup
-    )
+    try:
+        await query.edit_message_text(
+            clean_text("🤖 چت با هوش مصنوعی فعال شد!\n\nهر چی می‌خوای بگو، من یادم می‌مونه چی گفتی! 😎"),
+            reply_markup=reply_markup
+        )
+    except Exception:
+        await query.message.reply_text(
+            clean_text("🤖 چت با هوش مصنوعی فعال شد!\n\nهر چی می‌خوای بگو، من یادم می‌مونه چی گفتی! 😎"),
+            reply_markup=reply_markup
+        )
     return ConversationHandler.END
 
 async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2531,7 +2591,7 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_history.append({"role": "user", "content": user_message})
     context.user_data["chat_history"] = chat_history
     
-    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+    keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     try:
@@ -2719,7 +2779,11 @@ async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ],
         [InlineKeyboardButton("🔧 ابزارها", callback_data="tools_menu")]
     ]
-    await query.edit_message_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
+    # سعی می‌کنیم ویرایش کنیم، اگر نشد پیام جدید می‌فرستیم
+    try:
+        await query.edit_message_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
+    except Exception:
+        await query.message.reply_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
 
 async def back_to_home_from_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2760,10 +2824,16 @@ async def tools_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🖼️ حذف بک‌گراند عکس", callback_data="remove_background")],
         [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
     ]
-    await query.edit_message_text(
-        clean_text("🔧 منوی ابزارها\n\nیکی از ابزارها رو انتخاب کن:"),
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    try:
+        await query.edit_message_text(
+            clean_text("🔧 منوی ابزارها\n\nیکی از ابزارها رو انتخاب کن:"),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception:
+        await query.message.reply_text(
+            clean_text("🔧 منوی ابزارها\n\nیکی از ابزارها رو انتخاب کن:"),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
 async def start_remove_background(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """شروع فرآیند حذف بک‌گراند"""
@@ -2802,7 +2872,7 @@ async def handle_photo_for_background_removal(update: Update, context: ContextTy
         await update.message.reply_text(clean_text("لطفاً یک عکس بفرست!"))
         return WAIT_FOR_PHOTO
     
-    loading_message = await update.message.reply_text(clean_text("⏳ در حال پردازش عکس... لطفاً صبر کنید."))
+    loading_message = await update.message.reply_text(clean_text("⏳"))
     
     try:
         # دریافت فایل عکس از تلگرام
@@ -3108,6 +3178,7 @@ async def main():
             application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
             application.add_handler(CallbackQueryHandler(tools_menu, pattern="^tools_menu$"))
             application.add_handler(CallbackQueryHandler(back_to_home_from_result, pattern="^back_to_home_from_result$"))
+            application.add_handler(CallbackQueryHandler(regenerate_same_prompt, pattern="^regenerate_same_prompt$"))
             application.add_handler(search_conv_handler)
             application.add_handler(image_conv_handler)
             application.add_handler(group_image_conv_handler)

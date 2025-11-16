@@ -2754,50 +2754,61 @@ async def handle_photo_for_background_removal(update: Update, context: ContextTy
     try:
         # دریافت فایل عکس از تلگرام
         file = await context.bot.get_file(photo.file_id)
+        logger.info(f"File path از تلگرام: {file.file_path}")
         
         # دانلود عکس به صورت بایت
         photo_bytes = await file.download_as_bytearray()
         logger.info(f"عکس دانلود شد - اندازه: {len(photo_bytes)} بایت")
         
         # آپلود عکس به یک سرویس موقت برای دسترسی API
-        # استفاده از 0x0.st که یک سرویس آپلود ساده و رایگان است
         file_url = None
         
-        # روش 1: آپلود به 0x0.st
+        # روش 1: آپلود به transfer.sh
         try:
-            upload_response = requests.post(
-                'https://0x0.st',
-                files={'file': ('image.jpg', photo_bytes, 'image/jpeg')}
+            upload_response = requests.put(
+                f'https://transfer.sh/image_{int(time.time())}.jpg',
+                data=photo_bytes,
+                headers={'Max-Downloads': '1', 'Max-Days': '1'}
             )
             if upload_response.status_code == 200:
                 file_url = upload_response.text.strip()
-                logger.info(f"فایل با موفقیت آپلود شد به 0x0.st: {file_url}")
+                logger.info(f"فایل با موفقیت آپلود شد به transfer.sh: {file_url}")
             else:
-                raise Exception(f"خطا در آپلود به 0x0.st: {upload_response.status_code}")
+                raise Exception(f"خطا در آپلود به transfer.sh: {upload_response.status_code}")
         except Exception as upload_error:
-            logger.warning(f"خطا در آپلود به 0x0.st: {upload_error}")
-            # روش جایگزین: استفاده از file.io
+            logger.warning(f"خطا در آپلود به transfer.sh: {upload_error}")
+            # روش 2: آپلود به tmpfiles.org
             try:
                 upload_response = requests.post(
-                    'https://file.io',
-                    files={'file': ('image.jpg', photo_bytes, 'image/jpeg')},
-                    data={'expires': '1d'}
+                    'https://tmpfiles.org/api/v1/upload',
+                    files={'file': ('image.jpg', photo_bytes, 'image/jpeg')}
                 )
                 if upload_response.status_code == 200:
                     upload_data = upload_response.json()
-                    if upload_data.get('success'):
-                        file_url = upload_data.get('link')
-                        logger.info(f"فایل با موفقیت آپلود شد به file.io: {file_url}")
+                    if upload_data.get('status') == 'success':
+                        file_url = upload_data['data']['url'].replace('tmpfiles.org/', 'tmpfiles.org/dl/')
+                        logger.info(f"فایل با موفقیت آپلود شد به tmpfiles.org: {file_url}")
                     else:
-                        raise Exception("آپلود فایل به file.io ناموفق بود")
+                        raise Exception("آپلود فایل به tmpfiles.org ناموفق بود")
                 else:
-                    raise Exception(f"خطا در آپلود به file.io: {upload_response.status_code}")
+                    raise Exception(f"خطا در آپلود به tmpfiles.org: {upload_response.status_code}")
             except Exception as upload_error2:
-                logger.error(f"خطا در آپلود به file.io: {upload_error2}")
-                # روش آخر: استفاده از URL فایل تلگرام
-                photo_url = file.file_path
-                file_url = f"https://api.telegram.org/file/bot{TOKEN}/{photo_url}"
-                logger.warning(f"استفاده از URL فایل تلگرام: {file_url}")
+                logger.warning(f"خطا در آپلود به tmpfiles.org: {upload_error2}")
+                # روش 3: استفاده از URL فایل تلگرام (اصلاح شده)
+                photo_path = file.file_path
+                # بررسی اینکه آیا path کامل هست یا نسبی
+                # اگر path با http شروع بشه، یعنی URL کامل هست
+                if photo_path and photo_path.startswith('http'):
+                    file_url = photo_path
+                    logger.warning(f"استفاده از URL کامل فایل تلگرام: {file_url}")
+                elif photo_path:
+                    # اگر path نسبی باشه، URL کامل می‌سازیم
+                    # حذف هرگونه URL قبلی که ممکنه در path باشه
+                    clean_path = photo_path.replace(f'https://api.telegram.org/file/bot{TOKEN}/', '')
+                    file_url = f"https://api.telegram.org/file/bot{TOKEN}/{clean_path}"
+                    logger.warning(f"استفاده از URL فایل تلگرام (ساخته شده): {file_url}")
+                else:
+                    raise Exception("نمی‌توان path فایل را دریافت کرد")
         
         if not file_url:
             raise Exception("نمی‌توان URL فایل را دریافت کرد")

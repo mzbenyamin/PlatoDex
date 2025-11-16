@@ -2728,8 +2728,8 @@ async def back_to_home_from_result(update: Update, context: ContextTypes.DEFAULT
         ],
         [InlineKeyboardButton("🔧 ابزارها", callback_data="tools_menu")]
     ]
-    # فقط پیام دکمه رو ویرایش می‌کنیم، عکس‌ها رو نمی‌پاکیم
-    await query.edit_message_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
+    # ارسال پیام جدید به جای ویرایش
+    await query.message.reply_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
 
 async def tools_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2751,10 +2751,18 @@ async def start_remove_background(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     await query.answer()
     keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
-    await query.edit_message_text(
-        clean_text("🖼️ حذف بک‌گراند عکس\n\nلطفاً عکسی که می‌خوای بک‌گراندش حذف بشه رو بفرست:"),
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    # اگر پیام قبلی عکس باشه، پیام جدید می‌فرستیم
+    try:
+        await query.edit_message_text(
+            clean_text("🖼️ حذف بک‌گراند عکس\n\nلطفاً عکسی که می‌خوای بک‌گراندش حذف بشه رو بفرست:"),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception:
+        # اگر ویرایش نشد (مثلاً پیام قبلی عکس بوده)، پیام جدید می‌فرستیم
+        await query.message.reply_text(
+            clean_text("🖼️ حذف بک‌گراند عکس\n\nلطفاً عکسی که می‌خوای بک‌گراندش حذف بشه رو بفرست:"),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
     return WAIT_FOR_PHOTO
 
 async def handle_photo_for_background_removal(update: Update, context: ContextTypes.DEFAULT_TYPE):

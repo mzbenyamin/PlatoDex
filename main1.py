@@ -2755,10 +2755,52 @@ async def handle_photo_for_background_removal(update: Update, context: ContextTy
         # دریافت فایل عکس از تلگرام
         file = await context.bot.get_file(photo.file_id)
         
-        # دانلود عکس
-        photo_url = file.file_path
-        # ساخت URL کامل برای فایل تلگرام
-        file_url = f"https://api.telegram.org/file/bot{TOKEN}/{photo_url}"
+        # دانلود عکس به صورت بایت
+        photo_bytes = await file.download_as_bytearray()
+        logger.info(f"عکس دانلود شد - اندازه: {len(photo_bytes)} بایت")
+        
+        # آپلود عکس به یک سرویس موقت برای دسترسی API
+        # استفاده از 0x0.st که یک سرویس آپلود ساده و رایگان است
+        file_url = None
+        
+        # روش 1: آپلود به 0x0.st
+        try:
+            upload_response = requests.post(
+                'https://0x0.st',
+                files={'file': ('image.jpg', photo_bytes, 'image/jpeg')}
+            )
+            if upload_response.status_code == 200:
+                file_url = upload_response.text.strip()
+                logger.info(f"فایل با موفقیت آپلود شد به 0x0.st: {file_url}")
+            else:
+                raise Exception(f"خطا در آپلود به 0x0.st: {upload_response.status_code}")
+        except Exception as upload_error:
+            logger.warning(f"خطا در آپلود به 0x0.st: {upload_error}")
+            # روش جایگزین: استفاده از file.io
+            try:
+                upload_response = requests.post(
+                    'https://file.io',
+                    files={'file': ('image.jpg', photo_bytes, 'image/jpeg')},
+                    data={'expires': '1d'}
+                )
+                if upload_response.status_code == 200:
+                    upload_data = upload_response.json()
+                    if upload_data.get('success'):
+                        file_url = upload_data.get('link')
+                        logger.info(f"فایل با موفقیت آپلود شد به file.io: {file_url}")
+                    else:
+                        raise Exception("آپلود فایل به file.io ناموفق بود")
+                else:
+                    raise Exception(f"خطا در آپلود به file.io: {upload_response.status_code}")
+            except Exception as upload_error2:
+                logger.error(f"خطا در آپلود به file.io: {upload_error2}")
+                # روش آخر: استفاده از URL فایل تلگرام
+                photo_url = file.file_path
+                file_url = f"https://api.telegram.org/file/bot{TOKEN}/{photo_url}"
+                logger.warning(f"استفاده از URL فایل تلگرام: {file_url}")
+        
+        if not file_url:
+            raise Exception("نمی‌توان URL فایل را دریافت کرد")
         
         # URL encode کردن آدرس فایل
         encoded_url = quote(file_url, safe='')
@@ -2766,15 +2808,22 @@ async def handle_photo_for_background_removal(update: Update, context: ContextTy
         # فراخوانی API برای حذف بک‌گراند با retry
         api_url = f"https://api.majidapi.ir/image/remove-background?url={encoded_url}&out=photo&token={MAJID_AI_TOKEN}"
         
+        logger.info(f"درخواست به API (بدون token در لاگ): {api_url.split('token=')[0]}...")
+        
         # تلاش برای فراخوانی API با retry
         max_retries = 3
         response = None
         for attempt in range(max_retries):
             try:
                 response = requests.get(api_url, timeout=120)  # افزایش timeout به 120 ثانیه
+                logger.info(f"پاسخ API - Status: {response.status_code}, Attempt: {attempt + 1}")
                 if response.status_code == 200:
+                    logger.info(f"پاسخ موفق - Content-Type: {response.headers.get('Content-Type')}, Size: {len(response.content)}")
                     break
+                else:
+                    logger.warning(f"پاسخ ناموفق - Status: {response.status_code}, Response: {response.text[:200]}")
             except requests.exceptions.Timeout:
+                logger.warning(f"Timeout در تلاش {attempt + 1}")
                 if attempt < max_retries - 1:
                     await context.bot.edit_message_text(
                         chat_id=update.effective_chat.id,
@@ -2785,6 +2834,7 @@ async def handle_photo_for_background_removal(update: Update, context: ContextTy
                 else:
                     raise
             except Exception as e:
+                logger.error(f"خطا در تلاش {attempt + 1}: {e}")
                 if attempt < max_retries - 1:
                     await asyncio.sleep(2)
                 else:

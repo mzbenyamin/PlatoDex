@@ -2713,7 +2713,7 @@ async def tools_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     keyboard = [
         [InlineKeyboardButton("حذف بک‌گراند عکس 🖼️", callback_data="remove_background")],
-        [InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]
+        [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
     ]
     await query.edit_message_text(
         clean_text("🔧 منوی ابزارها\n\nیکی از ابزارها رو انتخاب کن:"),
@@ -2724,7 +2724,7 @@ async def start_remove_background(update: Update, context: ContextTypes.DEFAULT_
     """شروع فرآیند حذف بک‌گراند"""
     query = update.callback_query
     await query.answer()
-    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+    keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
     await query.edit_message_text(
         clean_text("🖼️ حذف بک‌گراند عکس\n\nلطفاً عکسی که می‌خوای بک‌گراندش حذف بشه رو بفرست:"),
         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -2763,12 +2763,34 @@ async def handle_photo_for_background_removal(update: Update, context: ContextTy
         # URL encode کردن آدرس فایل
         encoded_url = quote(file_url, safe='')
         
-        # فراخوانی API برای حذف بک‌گراند
+        # فراخوانی API برای حذف بک‌گراند با retry
         api_url = f"https://api.majidapi.ir/image/remove-background?url={encoded_url}&out=photo&token={MAJID_AI_TOKEN}"
         
-        response = requests.get(api_url, timeout=60)
+        # تلاش برای فراخوانی API با retry
+        max_retries = 3
+        response = None
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(api_url, timeout=120)  # افزایش timeout به 120 ثانیه
+                if response.status_code == 200:
+                    break
+            except requests.exceptions.Timeout:
+                if attempt < max_retries - 1:
+                    await context.bot.edit_message_text(
+                        chat_id=update.effective_chat.id,
+                        message_id=loading_message.message_id,
+                        text=clean_text(f"⏳ در حال پردازش عکس... (تلاش {attempt + 2}/{max_retries})")
+                    )
+                    await asyncio.sleep(2)  # صبر 2 ثانیه قبل از تلاش مجدد
+                else:
+                    raise
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2)
+                else:
+                    raise
         
-        if response.status_code == 200:
+        if response and response.status_code == 200:
             # حذف پیام لودینگ
             await context.bot.delete_message(
                 chat_id=update.effective_chat.id,
@@ -2781,7 +2803,7 @@ async def handle_photo_for_background_removal(update: Update, context: ContextTy
             
             keyboard = [
                 [InlineKeyboardButton("🔄 عکس دیگه", callback_data="remove_background")],
-                [InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]
+                [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -2804,7 +2826,7 @@ async def handle_photo_for_background_removal(update: Update, context: ContextTy
                 chat_id=update.effective_chat.id,
                 message_id=loading_message.message_id
             )
-            keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+            keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
             await update.message.reply_text(
                 clean_text("❌ مشکلی در پردازش عکس پیش آمد. لطفاً دوباره امتحان کنید."),
                 reply_markup=InlineKeyboardMarkup(keyboard)
@@ -2818,7 +2840,7 @@ async def handle_photo_for_background_removal(update: Update, context: ContextTy
             )
         except:
             pass
-        keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+        keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
         await update.message.reply_text(
             clean_text("❌ خطایی رخ داد. لطفاً بعداً امتحان کنید."),
             reply_markup=InlineKeyboardMarkup(keyboard)

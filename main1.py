@@ -2773,7 +2773,7 @@ async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "یکی رو انتخاب کن 👇"
     )
     keyboard = [
-        [InlineKeyboardButton("📱 اجرا مینی اپ", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
+        [InlineKeyboardButton("📱 اجرا مینی اپ", web_app={"url": "https://v0-item-extractor-app.vercel.app"})],
         [
             InlineKeyboardButton("🔍 سرچ آیتم", callback_data="search_items"),
             InlineKeyboardButton("🤖 چت با هوش مصنوعی", callback_data="chat_with_ai")
@@ -2805,7 +2805,7 @@ async def back_to_home_from_result(update: Update, context: ContextTypes.DEFAULT
         "یکی رو انتخاب کن 👇"
     )
     keyboard = [
-        [InlineKeyboardButton("📱 اجرا مینی اپ", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
+        [InlineKeyboardButton("📱 اجرا مینی اپ", web_app={"url": "hhttps://v0-item-extractor-app.vercel.app"})],
         [
             InlineKeyboardButton("🔍 سرچ آیتم", callback_data="search_items"),
             InlineKeyboardButton("🤖 چت با هوش مصنوعی", callback_data="chat_with_ai")

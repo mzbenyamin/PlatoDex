@@ -2972,8 +2972,7 @@ async def handle_prompt_for_img2img(update: Update, context: ContextTypes.DEFAUL
         headers = {
             "Origin": "https://aiimagetoimage.io",
             "Referer": "https://aiimagetoimage.io/",
-            "Accept": "*/*",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "Accept": "*/*"
         }
         
         # Call API to start job
@@ -2985,21 +2984,13 @@ async def handle_prompt_for_img2img(update: Update, context: ContextTypes.DEFAUL
         )
         
         if response.status_code != 200:
-            logger.error(f"Img2Img API Error Status: {response.status_code}")
-            logger.error(f"Img2Img API Error Body: {response.text}")
             raise Exception(f"API Error: {response.text}")
             
-        try:
-            job_data = response.json()
-        except Exception as json_err:
-            logger.error(f"Img2Img JSON Parse Error. Body: {response.text}")
-            raise json_err
-
-        job_id = job_data.get("job_id")
+        job_data = response.json()
+        job_id = job_data.get("job_id") or job_data.get("result", {}).get("job_id")
         
         if not job_id:
-            logger.error(f"Img2Img Missing Job ID. Response: {job_data}")
-            raise Exception(f"Job ID not found in response: {job_data}")
+            raise Exception(f"Job ID not found in response. Response: {job_data}")
             
         # Poll for result
         result_url = "https://api.aiimagetoimage.io/api/result/get"
@@ -3012,8 +3003,7 @@ async def handle_prompt_for_img2img(update: Update, context: ContextTypes.DEFAUL
                 params={"job_id": job_id},
                 headers={
                     "Referer": "https://aiimagetoimage.io/",
-                    "Accept": "*/*",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    "Accept": "*/*"
                 }
             ).json()
             

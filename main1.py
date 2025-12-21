@@ -21,6 +21,7 @@ import uvicorn
 import sqlite3
 import queue
 import threading
+import traceback
 
 # تنظیم لاگ
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -2680,7 +2681,18 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=reply_markup
             )
     except Exception as e:
-        logger.error(f"خطا در اتصال به API چت: {e}")
+        try:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            preview = None
+            resp = getattr(e, "response", None)
+            if resp is not None:
+                try:
+                    preview = resp.text[:500]
+                except Exception:
+                    preview = None
+            logger.error(f"خطا در اتصال به API چت: {type(e).__name__}: {e}, status={status}, resp_preview={preview}")
+        except Exception:
+            logger.error("خطا در اتصال به API چت")
         await update.message.reply_text(
             clean_text("اییی، یه خطا خوردم! 😭 بعداً دوباره بیا، قول می‌دم درستش کنم! 🚀"),
             reply_markup=reply_markup
@@ -2797,7 +2809,18 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
                 message_thread_id=thread_id
             )
     except Exception as e:
-        logger.error(f"خطا در اتصال به API چت گروه: {e}")
+        try:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            preview = None
+            resp = getattr(e, "response", None)
+            if resp is not None:
+                try:
+                    preview = resp.text[:500]
+                except Exception:
+                    preview = None
+            logger.error(f"خطا در اتصال به API چت گروه: {type(e).__name__}: {e}, status={status}, resp_preview={preview}")
+        except Exception:
+            logger.error("خطا در اتصال به API چت گروه")
         await update.message.reply_text(
             clean_text("خطایی رخ داد! 😭 بعداً دوباره امتحان کن 🚀"),
             message_thread_id=thread_id
@@ -3025,17 +3048,15 @@ async def process_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
             "aspect_ratio": context.user_data.get('img2img_aspect', '9:16')
         }
         
-        
-        # تولید IP تصادفی برای دور زدن محدودیت IP
-        random_ip = ".".join(map(str, (random.randint(0, 255) for _ in range(4))))
+        try:
+            logger.info(f"img2img request: model={data['model']}, aspect={data['aspect_ratio']}, strength={data['strength']}, prompt_len={len(prompt)}, image_bytes={len(photo_bytes)}")
+        except Exception:
+            logger.info("img2img request: logging failed")
         
         headers = {
             "Origin": "https://aiimagetoimage.io",
             "Referer": "https://aiimagetoimage.io/",
-            "Accept": "*/*",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "X-Forwarded-For": random_ip,
-            "X-Real-IP": random_ip
+            "Accept": "*/*"
         }
         
         # Call API to start job (Logic from 1.py)
@@ -3047,12 +3068,20 @@ async def process_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
         )
         
         if response.status_code != 200:
+            try:
+                logger.error(f"img2img API error: status={response.status_code}, body_preview={response.text[:500]}")
+            except Exception:
+                logger.error("img2img API error: failed to log response")
             raise Exception(f"API Error: {response.text}")
             
         job_data = response.json()
         
         # Check for daily limit reached
         if job_data.get("code") == 429:
+            try:
+                logger.error(f"img2img daily limit reached: response_preview={str(job_data)[:500]}")
+            except Exception:
+                logger.error("img2img daily limit reached")
             await context.bot.delete_message(chat_id=chat_id, message_id=loading_message.message_id)
             await context.bot.send_message(
                 chat_id=chat_id,
@@ -3066,11 +3095,19 @@ async def process_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
         job_id = job_data.get("job_id") or (job_data.get("result") or {}).get("job_id")
         
         if not job_id:
+            try:
+                logger.error(f"img2img job_id missing: response_preview={str(job_data)[:500]}")
+            except Exception:
+                logger.error("img2img job_id missing")
             raise Exception(f"Job ID not found in response. Response: {job_data}")
+        
+        logger.info(f"img2img job started: job_id={job_id}")
             
         # Poll for result (Logic from 2.py)
         result_url = "https://api.aiimagetoimage.io/api/result/get"
         final_image_url = None
+        last_status = None
+        last_res_preview = None
         
         # Increased timeout to 5 minutes (150 * 2s)
         for i in range(150): 
@@ -3098,6 +3135,13 @@ async def process_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
                 # Optional: Log progress every 10 attempts
                 if i % 10 == 0:
                     logger.info(f"Polling img2img job {job_id}: status={res.get('status')}, attempt={i+1}/150")
+                
+                try:
+                    last_status = res.get("status")
+                    last_res_preview = str(res)[:500]
+                except Exception:
+                    last_status = None
+                    last_res_preview = None
                     
             except requests.RequestException as e:
                 logger.warning(f"Network error polling job {job_id}: {e}")
@@ -3142,10 +3186,17 @@ async def process_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
         else:
+            try:
+                logger.error(f"Timeout waiting for image generation. last_status={last_status}, last_res_preview={last_res_preview}")
+            except Exception:
+                logger.error("Timeout waiting for image generation")
             raise Exception("Timeout waiting for image generation")
             
     except Exception as e:
-        logger.error(f"Error in img2img: {e}")
+        try:
+            logger.error(f"Error in img2img: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+        except Exception:
+            logger.error("Error in img2img")
         await context.bot.delete_message(chat_id=chat_id, message_id=loading_message.message_id)
         keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
         await context.bot.send_message(

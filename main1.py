@@ -3482,7 +3482,8 @@ async def main():
                     WAIT_FOR_IMG2IMG_PROMPT: [
                         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_prompt_for_img2img),
                         CallbackQueryHandler(repeat_img2img, pattern="^img2img_repeat$"),
-                        CallbackQueryHandler(continue_img2img, pattern="^img2img_continue$")
+                        CallbackQueryHandler(continue_img2img, pattern="^img2img_continue$"),
+                        CallbackQueryHandler(start_image_to_image, pattern="^image_to_image$")
                     ]
                 },
                 fallbacks=[

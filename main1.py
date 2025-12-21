@@ -2825,9 +2825,11 @@ async def tools_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     keyboard = [
-        [InlineKeyboardButton("🎨 ساخت عکس با هوش مصنوعی", callback_data="generate_image")],
         [InlineKeyboardButton("🎨 تغییر تصویر با هوش مصنوعی", callback_data="image_to_image")],
-        [InlineKeyboardButton("🖼️ حذف بک‌گراند عکس", callback_data="remove_background")],
+        [
+            InlineKeyboardButton("🎨 ساخت عکس", callback_data="generate_image"),
+            InlineKeyboardButton("🖼️ حذف بک‌گراند", callback_data="remove_background")
+        ],
         [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
     ]
     try:

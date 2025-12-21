@@ -2907,6 +2907,8 @@ async def select_img2img_model(update: Update, context: ContextTypes.DEFAULT_TYP
         [InlineKeyboardButton("9:16 (عمودی)", callback_data="img2img_aspect_9:16")],
         [InlineKeyboardButton("4:3 (استاندارد)", callback_data="img2img_aspect_4:3")],
         [InlineKeyboardButton("3:4 (پرتره)", callback_data="img2img_aspect_3:4")],
+        [InlineKeyboardButton("3:2 (عریض)", callback_data="img2img_aspect_3:2")],
+        [InlineKeyboardButton("2:3 (بلند)", callback_data="img2img_aspect_2:3")],
         [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
     ]
     
@@ -3014,6 +3016,9 @@ async def process_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
                 ).json()
                 
                 # Check for result in different places
+                if res is None:
+                    continue
+                    
                 result_data = res.get("result", {})
                 status = res.get("status")
                 

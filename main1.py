@@ -3020,7 +3020,12 @@ async def process_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
                 # Sometimes status is not present but image_url is in result
                 if status == "success" or (isinstance(result_data, dict) and result_data.get("image_url")):
                     # Try to find images in various locations
-                    images = res.get("images") or result_data.get("image_url") or result_data.get("images")
+                    images = None
+                    if isinstance(res, dict):
+                        images = res.get("images")
+                    
+                    if not images and isinstance(result_data, dict):
+                         images = result_data.get("image_url") or result_data.get("images")
                     
                     if images and len(images) > 0:
                         final_image_url = images[0]

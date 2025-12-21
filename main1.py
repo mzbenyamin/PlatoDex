@@ -2974,10 +2974,17 @@ async def process_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
             "aspect_ratio": context.user_data.get('img2img_aspect', '9:16')
         }
         
+        
+        # تولید IP تصادفی برای دور زدن محدودیت IP
+        random_ip = ".".join(map(str, (random.randint(0, 255) for _ in range(4))))
+        
         headers = {
             "Origin": "https://aiimagetoimage.io",
             "Referer": "https://aiimagetoimage.io/",
-            "Accept": "*/*"
+            "Accept": "*/*",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "X-Forwarded-For": random_ip,
+            "X-Real-IP": random_ip
         }
         
         # Call API to start job
@@ -2992,6 +2999,17 @@ async def process_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
             raise Exception(f"API Error: {response.text}")
             
         job_data = response.json()
+        
+        # Check for daily limit reached
+        if job_data.get("code") == 429:
+            await context.bot.delete_message(chat_id=chat_id, message_id=loading_message.message_id)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=clean_text("⚠️ محدودیت استفاده روزانه شما به پایان رسیده است. لطفاً فردا مجدداً تلاش کنید."),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]])
+            )
+            return ConversationHandler.END
+
         job_id = job_data.get("job_id") or (job_data.get("result") or {}).get("job_id")
         
         if not job_id:

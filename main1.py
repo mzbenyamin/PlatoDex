@@ -2942,19 +2942,20 @@ async def select_img2img_aspect(update: Update, context: ContextTypes.DEFAULT_TY
         )
     return WAIT_FOR_IMG2IMG_PROMPT
 
-async def handle_prompt_for_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دریافت پرامپت و انجام عملیات تغییر تصویر"""
-    prompt = update.message.text
-    if not prompt:
-        await update.message.reply_text(clean_text("لطفاً متن تغییرات را بنویسید!"))
-        return WAIT_FOR_IMG2IMG_PROMPT
+async def process_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE, prompt: str, photo_bytes: bytes):
+    """تابع کمکی برای پردازش تصویر"""
+    # تشخیص اینکه آیا درخواست از طریق دکمه بوده یا پیام متنی
+    if update.callback_query:
+        message = update.callback_query.message
+        chat_id = update.effective_chat.id
+    else:
+        message = update.message
+        chat_id = update.effective_chat.id
         
-    photo_bytes = context.user_data.get('img2img_photo')
-    if not photo_bytes:
-        await update.message.reply_text(clean_text("❌ عکس پیدا نشد! لطفاً دوباره شروع کنید."))
-        return ConversationHandler.END
-        
-    loading_message = await update.message.reply_text(clean_text("⏳ در حال پردازش تصویر... لطفاً صبر کنید (ممکن است تا 1 دقیقه طول بکشد)"))
+    loading_message = await context.bot.send_message(
+        chat_id=chat_id,
+        text=clean_text("⏳ در حال پردازش تصویر... لطفاً صبر کنید (ممکن است تا 1 دقیقه طول بکشد)")
+    )
     
     try:
         # Prepare the request
@@ -3034,10 +3035,11 @@ async def handle_prompt_for_img2img(update: Update, context: ContextTypes.DEFAUL
                 continue
                 
         if final_image_url:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
+            await context.bot.delete_message(chat_id=chat_id, message_id=loading_message.message_id)
             
             keyboard = [
-                [InlineKeyboardButton("🔄 دوباره", callback_data="image_to_image")],
+                [InlineKeyboardButton("🔄 دوباره", callback_data="image_to_image"), InlineKeyboardButton("🔁 تکرار همین", callback_data="img2img_repeat")],
+                [InlineKeyboardButton("➕ ادامه تغییرات", callback_data="img2img_continue")],
                 [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
             ]
             
@@ -3045,13 +3047,18 @@ async def handle_prompt_for_img2img(update: Update, context: ContextTypes.DEFAUL
             try:
                 img_response = requests.get(final_image_url)
                 if img_response.status_code == 200:
-                    await update.message.reply_photo(
+                    # Save the generated image for "Continue" feature
+                    context.user_data['last_generated_image'] = img_response.content
+                    
+                    await context.bot.send_photo(
+                        chat_id=chat_id,
                         photo=img_response.content,
                         caption=clean_text(f"🎨 تصویر شما آماده شد!\n\nتغییرات: {prompt}"),
                         reply_markup=InlineKeyboardMarkup(keyboard)
                     )
                 else:
-                     await update.message.reply_photo(
+                    await context.bot.send_photo(
+                        chat_id=chat_id,
                         photo=final_image_url,
                         caption=clean_text(f"🎨 تصویر شما آماده شد!\n\nتغییرات: {prompt}"),
                         reply_markup=InlineKeyboardMarkup(keyboard)
@@ -3059,7 +3066,8 @@ async def handle_prompt_for_img2img(update: Update, context: ContextTypes.DEFAUL
             except Exception as e:
                 logger.error(f"Error downloading result image: {e}")
                 # Fallback to URL if download fails
-                await update.message.reply_photo(
+                await context.bot.send_photo(
+                    chat_id=chat_id,
                     photo=final_image_url,
                     caption=clean_text(f"🎨 تصویر شما آماده شد!\n\nتغییرات: {prompt}"),
                     reply_markup=InlineKeyboardMarkup(keyboard)
@@ -3069,14 +3077,69 @@ async def handle_prompt_for_img2img(update: Update, context: ContextTypes.DEFAUL
             
     except Exception as e:
         logger.error(f"Error in img2img: {e}")
-        await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
+        await context.bot.delete_message(chat_id=chat_id, message_id=loading_message.message_id)
         keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
-        await update.message.reply_text(
-            clean_text("❌ مشکلی در پردازش تصویر پیش آمد. لطفاً دوباره امتحان کنید."),
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=clean_text("❌ مشکلی در پردازش تصویر پیش آمد. لطفاً دوباره امتحان کنید."),
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         
     return ConversationHandler.END
+
+async def handle_prompt_for_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دریافت پرامپت و انجام عملیات تغییر تصویر"""
+    prompt = update.message.text
+    if not prompt:
+        await update.message.reply_text(clean_text("لطفاً متن تغییرات را بنویسید!"))
+        return WAIT_FOR_IMG2IMG_PROMPT
+        
+    photo_bytes = context.user_data.get('img2img_photo')
+    if not photo_bytes:
+        await update.message.reply_text(clean_text("❌ عکس پیدا نشد! لطفاً دوباره شروع کنید."))
+        return ConversationHandler.END
+        
+    # Save prompt for repeat feature
+    context.user_data['img2img_prompt'] = prompt
+    
+    return await process_img2img(update, context, prompt, photo_bytes)
+
+async def repeat_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """تکرار آخرین تغییر تصویر با همان تنظیمات"""
+    query = update.callback_query
+    await query.answer()
+    
+    prompt = context.user_data.get('img2img_prompt')
+    photo_bytes = context.user_data.get('img2img_photo')
+    
+    if not prompt or not photo_bytes:
+        await query.message.reply_text(clean_text("❌ اطلاعات قبلی پیدا نشد! لطفاً دوباره شروع کنید."))
+        return ConversationHandler.END
+        
+    return await process_img2img(update, context, prompt, photo_bytes)
+
+async def continue_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """ادامه تغییرات روی آخرین تصویر تولید شده"""
+    query = update.callback_query
+    await query.answer()
+    
+    last_image = context.user_data.get('last_generated_image')
+    
+    if not last_image:
+        await query.message.reply_text(clean_text("❌ تصویر قبلی پیدا نشد! لطفاً دوباره شروع کنید."))
+        return ConversationHandler.END
+        
+    # Set last generated image as the new input image
+    context.user_data['img2img_photo'] = last_image
+    
+    keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
+    
+    await query.edit_message_caption(
+        caption=clean_text("✅ تصویر قبلی انتخاب شد.\n\nحالا بگو می‌خوای چه تغییر جدیدی توش بدم؟ (به انگلیسی بنویس)"),
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    
+    return WAIT_FOR_IMG2IMG_PROMPT
 
 async def start_remove_background(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """شروع فرآیند حذف بک‌گراند"""
@@ -3413,7 +3476,9 @@ async def main():
                         CallbackQueryHandler(select_img2img_aspect, pattern="^img2img_aspect_")
                     ],
                     WAIT_FOR_IMG2IMG_PROMPT: [
-                        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_prompt_for_img2img)
+                        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_prompt_for_img2img),
+                        CallbackQueryHandler(repeat_img2img, pattern="^img2img_repeat$"),
+                        CallbackQueryHandler(continue_img2img, pattern="^img2img_continue$")
                     ]
                 },
                 fallbacks=[

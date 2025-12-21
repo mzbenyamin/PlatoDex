@@ -2996,22 +2996,34 @@ async def handle_prompt_for_img2img(update: Update, context: ContextTypes.DEFAUL
         result_url = "https://api.aiimagetoimage.io/api/result/get"
         final_image_url = None
         
-        for _ in range(30): # Try for 60 seconds (30 * 2s)
+        # Increased timeout to 5 minutes (150 * 2s) as 60s was insufficient
+        for i in range(150): 
             await asyncio.sleep(2)
-            res = requests.get(
-                result_url,
-                params={"job_id": job_id},
-                headers={
-                    "Referer": "https://aiimagetoimage.io/",
-                    "Accept": "*/*"
-                }
-            ).json()
-            
-            if res.get("status") == "success":
-                final_image_url = res["images"][0]
-                break
-            elif res.get("status") == "failed":
-                raise Exception("Image generation failed")
+            try:
+                res = requests.get(
+                    result_url,
+                    params={"job_id": job_id},
+                    headers={
+                        "Referer": "https://aiimagetoimage.io/",
+                        "Accept": "*/*"
+                    },
+                    timeout=10
+                ).json()
+                
+                status = res.get("status")
+                if status == "success":
+                    final_image_url = res["images"][0]
+                    break
+                elif status == "failed":
+                    raise Exception(f"Image generation failed. Response: {res}")
+                
+                # Optional: Log progress every 10 attempts
+                if i % 10 == 0:
+                    logger.info(f"Polling img2img job {job_id}: status={status}, attempt={i+1}/150")
+                    
+            except requests.RequestException as e:
+                logger.warning(f"Network error polling job {job_id}: {e}")
+                continue
                 
         if final_image_url:
             await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)

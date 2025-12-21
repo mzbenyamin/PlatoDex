@@ -3513,20 +3513,20 @@ async def main():
                 persistent=False
             )
             
-            # Handler های ساده باید قبل از ConversationHandler ها باشن
-            application.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
-            application.add_handler(CallbackQueryHandler(back_to_home_from_result, pattern="^back_to_home_from_result$"))
-            application.add_handler(CallbackQueryHandler(regenerate_same_prompt, pattern="^regenerate_same_prompt$"))
-            application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
-            application.add_handler(CallbackQueryHandler(tools_menu, pattern="^tools_menu$"))
-            
-            application.add_handler(CommandHandler("start", start))
-            application.add_handler(CommandHandler("cancel", cancel))
             application.add_handler(search_conv_handler)
             application.add_handler(image_conv_handler)
             application.add_handler(group_image_conv_handler)
             application.add_handler(image_to_image_conv_handler)
             application.add_handler(remove_background_conv_handler)
+            
+            # Handler های ساده باید بعد از ConversationHandler ها باشن تا fallbacks درست کار کنند
+            application.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
+            application.add_handler(CallbackQueryHandler(back_to_home_from_result, pattern="^back_to_home_from_result$"))
+            application.add_handler(CallbackQueryHandler(regenerate_same_prompt, pattern="^regenerate_same_prompt$"))
+            application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
+            application.add_handler(CallbackQueryHandler(tools_menu, pattern="^tools_menu$"))
+            application.add_handler(CommandHandler("start", start))
+            application.add_handler(CommandHandler("cancel", cancel))
             application.add_handler(InlineQueryHandler(inline_query))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r'^@platodex\s+\w+'), handle_inline_selection))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))

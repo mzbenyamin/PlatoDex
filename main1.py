@@ -2992,7 +2992,7 @@ async def process_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
             raise Exception(f"API Error: {response.text}")
             
         job_data = response.json()
-        job_id = job_data.get("job_id") or job_data.get("result", {}).get("job_id")
+        job_id = job_data.get("job_id") or (job_data.get("result") or {}).get("job_id")
         
         if not job_id:
             raise Exception(f"Job ID not found in response. Response: {job_data}")
@@ -3019,7 +3019,7 @@ async def process_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
                 if res is None:
                     continue
                     
-                result_data = res.get("result", {})
+                result_data = res.get("result") or {}
                 status = res.get("status")
                 
                 # Sometimes status is not present but image_url is in result

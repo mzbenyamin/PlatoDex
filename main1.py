@@ -2600,16 +2600,30 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     try:
-        response = requests.get(
-            url=MAJID_AI_URL,
-            params={
-                "q": prompt,
-                "token": MAJID_AI_TOKEN,
-            },
-            timeout=30
-        )
-        response.raise_for_status()
+        response = None
+        for attempt in range(3):
+            try:
+                response = requests.get(
+                    url=MAJID_AI_URL,
+                    params={
+                        "q": prompt,
+                        "token": MAJID_AI_TOKEN,
+                    },
+                    timeout=30
+                )
+                response.raise_for_status()
+                break
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 429:
+                    if attempt < 2:
+                        logger.warning(f"Rate limit hit (429), retrying in {2 * (attempt + 1)} seconds...")
+                        await asyncio.sleep(2 * (attempt + 1))
+                        continue
+                raise e
         
+        if not response:
+             raise Exception("Max retries reached")
+             
         ai_response = None
         try:
             data = response.json()
@@ -2700,16 +2714,30 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
         prompt = f"سوال: {user_message}\n\nشما دستیار هوشمند PatoBot هستی که به کاربران کمک می‌کنی که از اپلیکیشن Plato مشکلی داشتند کمکشون کنی. خیلی کوتاه صحبت کن، اگر نیاز بود توضیح بده. به صورت خلاصه و خودمونی به سبک نسل Z صحبت کن."
     
     try:
-        response = requests.get(
-            url=MAJID_AI_URL,
-            params={
-                "q": prompt,
-                "token": MAJID_AI_TOKEN,
-            },
-            timeout=30
-        )
-        response.raise_for_status()
+        response = None
+        for attempt in range(3):
+            try:
+                response = requests.get(
+                    url=MAJID_AI_URL,
+                    params={
+                        "q": prompt,
+                        "token": MAJID_AI_TOKEN,
+                    },
+                    timeout=30
+                )
+                response.raise_for_status()
+                break
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 429:
+                    if attempt < 2:
+                        logger.warning(f"Rate limit hit (429) in group chat, retrying in {2 * (attempt + 1)} seconds...")
+                        await asyncio.sleep(2 * (attempt + 1))
+                        continue
+                raise e
         
+        if not response:
+             raise Exception("Max retries reached")
+             
         ai_response = None
         try:
             data = response.json()
@@ -2987,7 +3015,7 @@ async def process_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
             "X-Real-IP": random_ip
         }
         
-        # Call API to start job
+        # Call API to start job (Logic from 1.py)
         response = requests.post(
             "https://api.aiimagetoimage.io/api/img2img/image-generate/image2image",
             files=files,
@@ -3010,16 +3038,18 @@ async def process_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
             )
             return ConversationHandler.END
 
+        # Extract job_id (Logic from 1.py & 2.py)
+        # job_data usually looks like: {'job_id': '...', 'status': '...'} or {'result': {'job_id': '...'}}
         job_id = job_data.get("job_id") or (job_data.get("result") or {}).get("job_id")
         
         if not job_id:
             raise Exception(f"Job ID not found in response. Response: {job_data}")
             
-        # Poll for result
+        # Poll for result (Logic from 2.py)
         result_url = "https://api.aiimagetoimage.io/api/result/get"
         final_image_url = None
         
-        # Increased timeout to 5 minutes (150 * 2s) as 60s was insufficient
+        # Increased timeout to 5 minutes (150 * 2s)
         for i in range(150): 
             await asyncio.sleep(2)
             try:
@@ -3033,32 +3063,18 @@ async def process_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
                     timeout=10
                 ).json()
                 
-                # Check for result in different places
-                if res is None:
-                    continue
-                    
-                result_data = res.get("result") or {}
-                status = res.get("status")
-                
-                # Sometimes status is not present but image_url is in result
-                if status == "success" or (isinstance(result_data, dict) and result_data.get("image_url")):
-                    # Try to find images in various locations
-                    images = None
-                    if isinstance(res, dict):
-                        images = res.get("images")
-                    
-                    if not images and isinstance(result_data, dict):
-                         images = result_data.get("image_url") or result_data.get("images")
-                    
+                # Check logic from 2.py
+                if res.get("status") == "success":
+                    images = res.get("images")
                     if images and len(images) > 0:
                         final_image_url = images[0]
                         break
-                elif status == "failed":
-                    raise Exception(f"Image generation failed. Response: {res}")
+                elif res.get("status") == "failed":
+                     raise Exception(f"Image generation failed. Response: {res}")
                 
                 # Optional: Log progress every 10 attempts
                 if i % 10 == 0:
-                    logger.info(f"Polling img2img job {job_id}: status={status}, attempt={i+1}/150")
+                    logger.info(f"Polling img2img job {job_id}: status={res.get('status')}, attempt={i+1}/150")
                     
             except requests.RequestException as e:
                 logger.warning(f"Network error polling job {job_id}: {e}")

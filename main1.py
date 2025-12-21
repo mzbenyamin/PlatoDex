@@ -3033,11 +3033,29 @@ async def handle_prompt_for_img2img(update: Update, context: ContextTypes.DEFAUL
                 [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
             ]
             
-            await update.message.reply_photo(
-                photo=final_image_url,
-                caption=clean_text(f"🎨 تصویر شما آماده شد!\n\nتغییرات: {prompt}"),
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+            # Download the image first
+            try:
+                img_response = requests.get(final_image_url)
+                if img_response.status_code == 200:
+                    await update.message.reply_photo(
+                        photo=img_response.content,
+                        caption=clean_text(f"🎨 تصویر شما آماده شد!\n\nتغییرات: {prompt}"),
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                else:
+                     await update.message.reply_photo(
+                        photo=final_image_url,
+                        caption=clean_text(f"🎨 تصویر شما آماده شد!\n\nتغییرات: {prompt}"),
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+            except Exception as e:
+                logger.error(f"Error downloading result image: {e}")
+                # Fallback to URL if download fails
+                await update.message.reply_photo(
+                    photo=final_image_url,
+                    caption=clean_text(f"🎨 تصویر شما آماده شد!\n\nتغییرات: {prompt}"),
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
         else:
             raise Exception("Timeout waiting for image generation")
             

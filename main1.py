@@ -3010,10 +3010,18 @@ async def handle_prompt_for_img2img(update: Update, context: ContextTypes.DEFAUL
                     timeout=10
                 ).json()
                 
+                # Check for result in different places
+                result_data = res.get("result", {})
                 status = res.get("status")
-                if status == "success":
-                    final_image_url = res["images"][0]
-                    break
+                
+                # Sometimes status is not present but image_url is in result
+                if status == "success" or (isinstance(result_data, dict) and result_data.get("image_url")):
+                    # Try to find images in various locations
+                    images = res.get("images") or result_data.get("image_url") or result_data.get("images")
+                    
+                    if images and len(images) > 0:
+                        final_image_url = images[0]
+                        break
                 elif status == "failed":
                     raise Exception(f"Image generation failed. Response: {res}")
                 

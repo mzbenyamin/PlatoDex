@@ -39,6 +39,10 @@ AI_CHAT_USERS = set()
 SEARCH_ITEM, SELECT_CATEGORY = range(2)
 SELECT_SIZE, GET_PROMPT = range(2, 4)
 WAIT_FOR_PHOTO = 4
+WAIT_FOR_IMG2IMG_PHOTO = 5
+WAIT_FOR_IMG2IMG_PROMPT = 6
+WAIT_FOR_IMG2IMG_MODEL = 7
+WAIT_FOR_IMG2IMG_ASPECT = 8
 DEFAULT_CHAT_ID = 789912945
 PROCESSED_MESSAGES = set()
 PROCESSING_LOCK = asyncio.Lock()  # تغییر به asyncio.Lock
@@ -2822,6 +2826,7 @@ async def tools_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     keyboard = [
         [InlineKeyboardButton("🎨 ساخت عکس با هوش مصنوعی", callback_data="generate_image")],
+        [InlineKeyboardButton("🎨 تغییر تصویر با هوش مصنوعی", callback_data="image_to_image")],
         [InlineKeyboardButton("🖼️ حذف بک‌گراند عکس", callback_data="remove_background")],
         [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
     ]
@@ -2835,6 +2840,205 @@ async def tools_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             clean_text("🔧 منوی ابزارها\n\nیکی از ابزارها رو انتخاب کن:"),
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+
+async def start_image_to_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """شروع فرآیند تغییر تصویر"""
+    query = update.callback_query
+    await query.answer()
+    keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
+    
+    try:
+        await query.edit_message_text(
+            clean_text("🎨 تغییر تصویر با هوش مصنوعی\n\nلطفاً عکسی که می‌خوای تغییر بدی رو بفرست:"),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception:
+        await query.message.reply_text(
+            clean_text("🎨 تغییر تصویر با هوش مصنوعی\n\nلطفاً عکسی که می‌خوای تغییر بدی رو بفرست:"),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    return WAIT_FOR_IMG2IMG_PHOTO
+
+async def handle_photo_for_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دریافت عکس برای تغییر تصویر"""
+    if not update.message:
+        return WAIT_FOR_IMG2IMG_PHOTO
+    
+    photo = None
+    if update.message.photo:
+        photo = update.message.photo[-1]
+    elif update.message.document and update.message.document.mime_type and update.message.document.mime_type.startswith('image/'):
+        photo = update.message.document
+    
+    if not photo:
+        await update.message.reply_text(clean_text("لطفاً یک عکس بفرست!"))
+        return WAIT_FOR_IMG2IMG_PHOTO
+    
+    file = await context.bot.get_file(photo.file_id)
+    photo_bytes = await file.download_as_bytearray()
+    
+    # Save photo bytes in context to use later
+    context.user_data['img2img_photo'] = photo_bytes
+    
+    keyboard = [
+        [InlineKeyboardButton("🚀 Standard", callback_data="img2img_model_standard")],
+        [InlineKeyboardButton("🍌 Nano Banana", callback_data="img2img_model_nano_banana")],
+        [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
+    ]
+    await update.message.reply_text(
+        clean_text("✅ عکس دریافت شد!\n\nلطفاً مدل هوش مصنوعی مورد نظرت رو انتخاب کن:"),
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return WAIT_FOR_IMG2IMG_MODEL
+
+async def select_img2img_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """انتخاب مدل برای تغییر تصویر"""
+    query = update.callback_query
+    await query.answer()
+    
+    model = query.data.replace("img2img_model_", "")
+    context.user_data['img2img_model'] = model
+    
+    keyboard = [
+        [InlineKeyboardButton("1:1 (مربع)", callback_data="img2img_aspect_1:1")],
+        [InlineKeyboardButton("16:9 (افقی)", callback_data="img2img_aspect_16:9")],
+        [InlineKeyboardButton("9:16 (عمودی)", callback_data="img2img_aspect_9:16")],
+        [InlineKeyboardButton("4:3 (استاندارد)", callback_data="img2img_aspect_4:3")],
+        [InlineKeyboardButton("3:4 (پرتره)", callback_data="img2img_aspect_3:4")],
+        [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
+    ]
+    
+    try:
+        await query.edit_message_text(
+            clean_text(f"✅ مدل {model} انتخاب شد.\n\nحالا ابعاد تصویر خروجی رو انتخاب کن:"),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception:
+        await query.message.reply_text(
+            clean_text(f"✅ مدل {model} انتخاب شد.\n\nحالا ابعاد تصویر خروجی رو انتخاب کن:"),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    return WAIT_FOR_IMG2IMG_ASPECT
+
+async def select_img2img_aspect(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """انتخاب نسبت ابعاد برای تغییر تصویر"""
+    query = update.callback_query
+    await query.answer()
+    
+    aspect = query.data.replace("img2img_aspect_", "")
+    context.user_data['img2img_aspect'] = aspect
+    
+    keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
+    
+    try:
+        await query.edit_message_text(
+            clean_text(f"✅ ابعاد {aspect} انتخاب شد.\n\nحالا بگو می‌خوای چه تغییری توش بدم؟ (به انگلیسی بنویس)\nمثلاً: make it cyberpunk style"),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception:
+        await query.message.reply_text(
+            clean_text(f"✅ ابعاد {aspect} انتخاب شد.\n\nحالا بگو می‌خوای چه تغییری توش بدم؟ (به انگلیسی بنویس)\nمثلاً: make it cyberpunk style"),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    return WAIT_FOR_IMG2IMG_PROMPT
+
+async def handle_prompt_for_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دریافت پرامپت و انجام عملیات تغییر تصویر"""
+    prompt = update.message.text
+    if not prompt:
+        await update.message.reply_text(clean_text("لطفاً متن تغییرات را بنویسید!"))
+        return WAIT_FOR_IMG2IMG_PROMPT
+        
+    photo_bytes = context.user_data.get('img2img_photo')
+    if not photo_bytes:
+        await update.message.reply_text(clean_text("❌ عکس پیدا نشد! لطفاً دوباره شروع کنید."))
+        return ConversationHandler.END
+        
+    loading_message = await update.message.reply_text(clean_text("⏳ در حال پردازش تصویر... لطفاً صبر کنید (ممکن است تا 1 دقیقه طول بکشد)"))
+    
+    try:
+        # Prepare the request
+        files = {
+            "image": ("input.jpg", io.BytesIO(photo_bytes), "image/jpeg")
+        }
+        
+        data = {
+            "prompt": prompt,
+            "strength": "0.7",
+            "model": context.user_data.get('img2img_model', 'standard'),
+            "aspect_ratio": context.user_data.get('img2img_aspect', '9:16')
+        }
+        
+        headers = {
+            "Origin": "https://aiimagetoimage.io",
+            "Referer": "https://aiimagetoimage.io/",
+            "Accept": "*/*"
+        }
+        
+        # Call API to start job
+        response = requests.post(
+            "https://api.aiimagetoimage.io/api/img2img/image-generate/image2image",
+            files=files,
+            data=data,
+            headers=headers
+        )
+        
+        if response.status_code != 200:
+            raise Exception(f"API Error: {response.text}")
+            
+        job_data = response.json()
+        job_id = job_data.get("job_id")
+        
+        if not job_id:
+            raise Exception("Job ID not found in response")
+            
+        # Poll for result
+        result_url = "https://api.aiimagetoimage.io/api/result/get"
+        final_image_url = None
+        
+        for _ in range(30): # Try for 60 seconds (30 * 2s)
+            await asyncio.sleep(2)
+            res = requests.get(
+                result_url,
+                params={"job_id": job_id},
+                headers={
+                    "Referer": "https://aiimagetoimage.io/",
+                    "Accept": "*/*"
+                }
+            ).json()
+            
+            if res.get("status") == "success":
+                final_image_url = res["images"][0]
+                break
+            elif res.get("status") == "failed":
+                raise Exception("Image generation failed")
+                
+        if final_image_url:
+            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
+            
+            keyboard = [
+                [InlineKeyboardButton("🔄 دوباره", callback_data="image_to_image")],
+                [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
+            ]
+            
+            await update.message.reply_photo(
+                photo=final_image_url,
+                caption=clean_text(f"🎨 تصویر شما آماده شد!\n\nتغییرات: {prompt}"),
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        else:
+            raise Exception("Timeout waiting for image generation")
+            
+    except Exception as e:
+        logger.error(f"Error in img2img: {e}")
+        await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
+        keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
+        await update.message.reply_text(
+            clean_text("❌ مشکلی در پردازش تصویر پیش آمد. لطفاً دوباره امتحان کنید."),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        
+    return ConversationHandler.END
 
 async def start_remove_background(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """شروع فرآیند حذف بک‌گراند"""
@@ -3156,6 +3360,33 @@ async def main():
                 persistent=False
             )
 
+            image_to_image_conv_handler = ConversationHandler(
+                entry_points=[
+                    CallbackQueryHandler(start_image_to_image, pattern="^image_to_image$")
+                ],
+                states={
+                    WAIT_FOR_IMG2IMG_PHOTO: [
+                        MessageHandler(filters.PHOTO | (filters.Document.IMAGE), handle_photo_for_img2img)
+                    ],
+                    WAIT_FOR_IMG2IMG_MODEL: [
+                        CallbackQueryHandler(select_img2img_model, pattern="^img2img_model_")
+                    ],
+                    WAIT_FOR_IMG2IMG_ASPECT: [
+                        CallbackQueryHandler(select_img2img_aspect, pattern="^img2img_aspect_")
+                    ],
+                    WAIT_FOR_IMG2IMG_PROMPT: [
+                        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_prompt_for_img2img)
+                    ]
+                },
+                fallbacks=[
+                    CommandHandler("cancel", cancel),
+                    CommandHandler("start", start),
+                    CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
+                ],
+                name="image_to_image",
+                persistent=False
+            )
+
             remove_background_conv_handler = ConversationHandler(
                 entry_points=[
                     CallbackQueryHandler(start_remove_background, pattern="^remove_background$")
@@ -3186,6 +3417,7 @@ async def main():
             application.add_handler(search_conv_handler)
             application.add_handler(image_conv_handler)
             application.add_handler(group_image_conv_handler)
+            application.add_handler(image_to_image_conv_handler)
             application.add_handler(remove_background_conv_handler)
             application.add_handler(InlineQueryHandler(inline_query))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r'^@platodex\s+\w+'), handle_inline_selection))

@@ -3102,7 +3102,9 @@ async def handle_prompt_for_img2img(update: Update, context: ContextTypes.DEFAUL
     # Save prompt for repeat feature
     context.user_data['img2img_prompt'] = prompt
     
-    return await process_img2img(update, context, prompt, photo_bytes)
+    # We stay in the same state to handle callbacks
+    await process_img2img(update, context, prompt, photo_bytes)
+    return WAIT_FOR_IMG2IMG_PROMPT
 
 async def repeat_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """تکرار آخرین تغییر تصویر با همان تنظیمات"""
@@ -3116,7 +3118,8 @@ async def repeat_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_text(clean_text("❌ اطلاعات قبلی پیدا نشد! لطفاً دوباره شروع کنید."))
         return ConversationHandler.END
         
-    return await process_img2img(update, context, prompt, photo_bytes)
+    await process_img2img(update, context, prompt, photo_bytes)
+    return WAIT_FOR_IMG2IMG_PROMPT
 
 async def continue_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """ادامه تغییرات روی آخرین تصویر تولید شده"""
@@ -3134,7 +3137,8 @@ async def continue_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
     
-    await query.edit_message_caption(
+    await query.message.reply_photo(
+        photo=last_image,
         caption=clean_text("✅ تصویر قبلی انتخاب شد.\n\nحالا بگو می‌خوای چه تغییر جدیدی توش بدم؟ (به انگلیسی بنویس)"),
         reply_markup=InlineKeyboardMarkup(keyboard)
     )

@@ -570,6 +570,11 @@ async def webhook(request: Request):
     global application
     update = await request.json()
     update_obj = Update.de_json(update, application.bot)
+    
+    # Check if update_obj is valid
+    if not update_obj:
+        return {"status": "ok"}
+        
     update_id = update_obj.update_id
     logger.info(f"دریافت درخواست با update_id: {update_id}")
     async with PROCESSING_LOCK:
@@ -577,7 +582,16 @@ async def webhook(request: Request):
             logger.warning(f"درخواست تکراری با update_id: {update_id} - نادیده گرفته شد")
             return {"status": "ok"}
         PROCESSED_MESSAGES.add(update_id)
-    asyncio.create_task(application.process_update(update_obj))
+        
+    # Check if we have a valid message for message handlers
+    # Callback queries are handled separately by handlers but we need to be careful
+    # Not all updates have messages (e.g. callback_query, channel_post, etc.)
+    
+    try:
+        asyncio.create_task(application.process_update(update_obj))
+    except Exception as e:
+        logger.error(f"Error processing update: {e}")
+        
     return {"status": "ok"}
 
 @app.get("/")
@@ -703,6 +717,9 @@ def scrape_profile(player_link):
 
 # نمایش لیدربرد
 async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+        
     message_id = update.message.message_id
     async with PROCESSING_LOCK:
         if message_id in PROCESSED_MESSAGES:
@@ -1585,6 +1602,9 @@ async def search_by_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SEARCH_ITEM
 
 async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return SEARCH_ITEM
+        
     message_id = update.message.message_id
     async with PROCESSING_LOCK:
         if message_id in PROCESSED_MESSAGES:
@@ -2669,6 +2689,9 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+        
     message_id = update.message.message_id
     async with PROCESSING_LOCK:
         if message_id in PROCESSED_MESSAGES:

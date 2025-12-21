@@ -3038,7 +3038,7 @@ async def process_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
             await context.bot.delete_message(chat_id=chat_id, message_id=loading_message.message_id)
             
             keyboard = [
-                [InlineKeyboardButton("🔄 دوباره", callback_data="image_to_image"), InlineKeyboardButton("🔁 تکرار همین", callback_data="img2img_repeat")],
+                [InlineKeyboardButton("🖼 ساخت عکس جدید ", callback_data="image_to_image"), InlineKeyboardButton("🔁 تکرار مجدد عکس", callback_data="img2img_repeat")],
                 [InlineKeyboardButton("➕ ادامه تغییرات", callback_data="img2img_continue")],
                 [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
             ]

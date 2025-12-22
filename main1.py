@@ -3129,15 +3129,21 @@ async def process_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
                     if images and len(images) > 0:
                         final_image_url = images[0]
                         break
+                # Support for structure seen in logs: {'code': 200, 'result': {'image_url': [...]}}
+                elif res.get("code") == 200 and res.get("result") and res["result"].get("image_url"):
+                    images = res["result"]["image_url"]
+                    if images and len(images) > 0:
+                        final_image_url = images[0]
+                        break
                 elif res.get("status") == "failed":
                      raise Exception(f"Image generation failed. Response: {res}")
                 
                 # Optional: Log progress every 10 attempts
                 if i % 10 == 0:
-                    logger.info(f"Polling img2img job {job_id}: status={res.get('status')}, attempt={i+1}/150")
+                    logger.info(f"Polling img2img job {job_id}: status={res.get('status') or res.get('code')}, attempt={i+1}/150")
                 
                 try:
-                    last_status = res.get("status")
+                    last_status = res.get("status") or res.get("code")
                     last_res_preview = str(res)[:500]
                 except Exception:
                     last_status = None
@@ -3169,12 +3175,25 @@ async def process_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
                         caption=clean_text(f"🎨 تصویر شما آماده شد!\n\nتغییرات: {prompt}"),
                         reply_markup=InlineKeyboardMarkup(keyboard)
                     )
+                    # Send as file as well
+                    await context.bot.send_document(
+                        chat_id=chat_id,
+                        document=img_response.content,
+                        filename="result.jpg",
+                        caption=clean_text("📁 فایل تصویر با کیفیت اصلی")
+                    )
                 else:
                     await context.bot.send_photo(
                         chat_id=chat_id,
                         photo=final_image_url,
                         caption=clean_text(f"🎨 تصویر شما آماده شد!\n\nتغییرات: {prompt}"),
                         reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                    # Send as file as well
+                    await context.bot.send_document(
+                        chat_id=chat_id,
+                        document=final_image_url,
+                        caption=clean_text("📁 فایل تصویر با کیفیت اصلی")
                     )
             except Exception as e:
                 logger.error(f"Error downloading result image: {e}")
@@ -3185,6 +3204,15 @@ async def process_img2img(update: Update, context: ContextTypes.DEFAULT_TYPE, pr
                     caption=clean_text(f"🎨 تصویر شما آماده شد!\n\nتغییرات: {prompt}"),
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
+                # Send as file as well
+                try:
+                    await context.bot.send_document(
+                        chat_id=chat_id,
+                        document=final_image_url,
+                        caption=clean_text("📁 فایل تصویر با کیفیت اصلی")
+                    )
+                except Exception as doc_e:
+                    logger.error(f"Error sending document: {doc_e}")
         else:
             try:
                 logger.error(f"Timeout waiting for image generation. last_status={last_status}, last_res_preview={last_res_preview}")

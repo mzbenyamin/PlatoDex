@@ -8,18 +8,20 @@ import html
 import logging
 import asyncio
 import time
+from urllib.parse import quote
 from fastapi import FastAPI, Request
 from PIL import Image
 import io
 import tempfile
 import os
-import random
-import uuid  # برای تولید شناسه‌های منحصر به فرد
-from typing import List, Dict, Optional, Union
+from dataclasses import dataclass
+from typing import List, Dict, Optional, Union, AsyncIterator
 import uvicorn
 import sqlite3
 import queue
 import threading
+import traceback
+import websockets
 
 # تنظیم لاگ
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -27,101 +29,171 @@ logger = logging.getLogger(__name__)
 
 # توکن و آدرس‌ها
 TOKEN = '7764880184:AAEAp5oyNfB__Cotdmtxb9BHnWgwydRN0ME'
-IMAGE_API_URL = 'https://pollinations.ai/prompt/'
-TEXT_API_URL = 'https://text.pollinations.ai/generate'
+MAJID_AI_TOKEN = 'sy8nbfxproszixn:SUFefQO1WnetrcJxYu4J'
 URL = "https://platopedia.com/items"
 BASE_IMAGE_URL = "https://profile.platocdn.com/"
 WEBHOOK_URL = "https://platodex.onrender.com/webhook"
 EXTRACTED_ITEMS = []
 AI_CHAT_USERS = set()
 SEARCH_ITEM, SELECT_CATEGORY = range(2)
-SELECT_SIZE, GET_PROMPT = range(2, 4)
+WAIT_FOR_PHOTO = 4
 DEFAULT_CHAT_ID = 789912945
 PROCESSED_MESSAGES = set()
 PROCESSING_LOCK = asyncio.Lock()  # تغییر به asyncio.Lock
 
-# این تابع جدید را اضافه کنید که callback_data امن ایجاد می‌کند
-def generate_safe_callback_data(prompt):
-    """
-    ایجاد یک callback_data امن برای استفاده در دکمه‌های اینلاین
-    به جای استفاده از خود پرامپت، یک شناسه منحصر به فرد تولید می‌کند
-    """
-    # تولید یک ID منحصر به فرد کوتاه
-    callback_id = str(uuid.uuid4())[:8]
-    return f"regenerate_image_{callback_id}"
+@dataclass(frozen=True)
+class CopilotSession:
+    conversation_id: str
+    cookie: str
+
+
+class CopilotClient:
+    def __init__(self) -> None:
+        self._user_agent = "CopilotNative/30.0.430320002 (Android 9; samsung; SM-G988N)"
+        self._system_prompt = (
+            "Reply with the answer only.\n"
+            "Follow the requested output format exactly.\n"
+            "Do not add preface, code fences, or extra commentary unless explicitly requested."
+        )
+
+    def _language_name(self, language: str) -> str:
+        language = (language or "").strip().lower()
+        return {
+            "fa": "Persian",
+            "en": "English",
+            "ru": "Russian",
+            "ar": "Arabic",
+        }.get(language, "English")
+
+    def _build_prompt(
+        self,
+        user_text: str,
+        language: str,
+        *,
+        system_prompt_extra: Optional[str] = None,
+    ) -> str:
+        user_text = (user_text or "").strip()
+        extra = (system_prompt_extra or "").strip()
+        sys_prompt = self._system_prompt if not extra else f"{self._system_prompt}\n{extra}"
+        return f"{sys_prompt}\nWrite in {self._language_name(language)}.\n\n{user_text}"
+
+    async def ask(
+        self,
+        user_text: str,
+        language: str = "fa",
+        *,
+        system_prompt_extra: Optional[str] = None,
+    ) -> str:
+        final_text = ""
+        async for delta in self.ask_stream(
+            user_text=user_text,
+            language=language,
+            system_prompt_extra=system_prompt_extra,
+        ):
+            final_text += delta
+        return final_text.strip() or " "
+
+    async def ask_stream(
+        self,
+        user_text: str,
+        language: str = "fa",
+        *,
+        system_prompt_extra: Optional[str] = None,
+    ) -> AsyncIterator[str]:
+        prompt = self._build_prompt(
+            user_text=user_text,
+            language=language,
+            system_prompt_extra=system_prompt_extra,
+        )
+        session = await self._start_conversation()
+        async for delta in self._chat_stream(user_text=prompt, session=session):
+            yield delta
+
+    async def _start_conversation(self) -> CopilotSession:
+        url = "https://copilot.microsoft.com/c/api/start"
+        payload = {
+            "timeZone": "Asia/Tehran",
+            "startNewConversation": True,
+            "teenSupportEnabled": False,
+        }
+        headers = {
+            "User-Agent": self._user_agent,
+            "x-search-uilang": "en-US",
+            "Content-Type": "application/json",
+            "Accept-Encoding": "gzip",
+        }
+
+        def _req() -> requests.Response:
+            return requests.post(url, json=payload, headers=headers, timeout=15)
+
+        resp = await asyncio.to_thread(_req)
+        resp.raise_for_status()
+        data = resp.json()
+        conversation_id = data.get("currentConversationId")
+        cookie = resp.headers.get("set-cookie", "")
+
+        if not conversation_id or not cookie:
+            raise RuntimeError("Copilot start failed")
+
+        return CopilotSession(conversation_id=conversation_id, cookie=cookie)
+
+    async def _chat_stream(self, user_text: str, session: CopilotSession):
+        ws_url = "wss://copilot.microsoft.com/c/api/chat?api-version=2"
+        headers = {"User-Agent": self._user_agent, "Cookie": session.cookie}
+
+        last_error: Optional[Exception] = None
+        for attempt in range(3):
+            yielded_any = False
+            try:
+                try:
+                    ws_cm = websockets.connect(ws_url, additional_headers=headers)
+                except TypeError:
+                    ws_cm = websockets.connect(ws_url, extra_headers=headers)
+                async with ws_cm as ws:
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "event": "setOptions",
+                                "supportedCards": [],
+                                "supportedActions": [],
+                            }
+                        )
+                    )
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "event": "send",
+                                "content": [{"type": "text", "text": user_text}],
+                                "context": {},
+                                "conversationId": session.conversation_id,
+                            }
+                        )
+                    )
+
+                    while True:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=45)
+                        data = json.loads(raw)
+                        if data.get("event") == "appendText" and data.get("text"):
+                            yielded_any = True
+                            yield data["text"]
+                        elif data.get("event") == "done":
+                            return
+            except Exception as exc:
+                last_error = exc
+                if yielded_any:
+                    break
+                await asyncio.sleep(0.5 * (attempt + 1))
+
+        raise last_error or RuntimeError("Copilot chat failed")
+
+
+COPILOT_CLIENT = CopilotClient()
 
 SYSTEM_MESSAGE = (
-    "شما دستیار هوشمند PlatoDex هستید و درمورد پلاتو به کاربران کمک میکنید با ایموجی "
-    "حرف میزنی به صورت حکیمانه و انگار ۶۰ سال ست داری صحبت میکنی و فوق العاده خنده دار و طنز حرف میزنی و شوخی کن\\. به مشخصات آیتم‌های پلاتو دسترسی داری و می‌تونی "
-    "به سوالات کاربر در مورد آیتم‌ها جواب بدی و راهنمایی کنی چطور با دستور /i مشخصات کامل رو بگیرن\\. "
-    "حذف اکانت\n"
-    "چطور اکانتمو حذف کنم؟\nبرای حذف اکانت این مراحل رو برو:\n"
-    "- اپلیکیشن Plato رو باز کن\n- رو عکس پروفایلت بالا چپ بزن\n- آیکون چرخ‌دنده رو بزن\n- برو Account\n- بزن Delete Account\n"
-    "مراحل رو دنبال کن تا اکانتت کامل حذف شه\\. حواست باشه این کار قابل برگشت نیس و بعد 10 روز همه چی (ایمیل، یوزرنیم، تاریخچه بازی و چت) پاک می‌شه\\. تو این 10 روز لاگین نکنی وگرنه درخواست کنسل می‌شه!\n"
-    "یکی دیگه اکانتمو حذف کرده، می‌تونم برگردونمش؟\nبعد 10 روز دیگه هیچ راهی برای برگشت نیست\\. اکانتت مال خودته، کد لاگینتو به کسی نده وگرنه ممکنه کلا از دستش بدی!\n\n"
-    "اطلاعات عمومی\n"
-    "Plato News چیه؟\nاخبار پلاتو که تو تب Home > News پیدا می‌شه، رویدادا و آپدیتا رو نشون می‌ده\\. تو وب هم می‌تونی ببینیش\\.\\n"
-    "چطور سکه جمع کنم؟\n- از Shop بخر\n- از دوستات بخواه بهت هدیه بدن\n- روزانه از Daily Quest بگیر\n- تو تورنمنتای خاص برنده شو\n"
-    "اشتباهی یه آیتم خریدم، پولمو برمی‌گردونین؟\nپلاتو ریفاند نداره، قبل خرید چک کن!\n"
-    "یه باگ پیدا کردم، چطور گزارش بدم؟\nبرو ⚙️ > Help/Contact Us > Report a Problem\\. هر چی جزییات داری بگو تا تیم بتونه درست بررسی کنه\\.\\n"
-    "ایده یا پیشنهادی دارم، کجا بگم؟\nایمیل بزن به hello@platoapp\\.com، کامل توضیح بده تا به تیم مربوطه بفرستن\\.\\n"
-    "چرا بلاک کار نمی‌کنه؟\nاحتمالا لیست بلاکت پر شده، برو ⚙️ > Privacy > Blocked Users و قدیمی‌ها رو پاک کن\\.\\n"
-    "چطور یه نفر رو فقط بلاک کنم بدون گزارش؟\nبلاک کن و گزارش بده 'this person is spamming'\\. جریمه فقط برای محتوای مضر اعمال می‌شه\\.\\n"
-    "چطور گزارش بدم بدون بلاک؟\nبلاک و گزارش کن، بعد آنبلاک کن\\. گزارش پس گرفته نمی‌شه\\.\\n"
-    "یکی ینکی تو بازی تقلب کرد، چیکار کنم؟\nبلاک و گزارش کن 'this person is playing unfairly'\\.\\n"
-    "یکی تو ترید کلاهبرداری کرد، چیکار کنم؟\nپلاتو فقط گیفت دادن رو ساپورت می‌کنه، ترید ریسک خودته\\. نکات: اول گیفت نده، با دوستای قابل اعتماد ترید کن، از گروه‌های مخصوص ترید استفاده کن\\.\\n"
-    "حداقل سیستم مورد نیاز پلاتو چیه؟\nAndroid 6\\.0 یا iOS 15\\.\\n"
-    "برای چیزی که اینجا نیست چطور با پلاتو تماس بگیرم؟\nایمیل بزن، معمولاً تو 24 ساعت (روزای کاری) جواب می‌دن\\.\\n\\n"
-    "مدیریت (Moderation)\n"
-    "مدیریت تو پلاتو چطوره؟\nیه سری Community Guidelines داریم که باید رعایت شه:\n"
-    "- تکنولوژی real-time پیامای عمومی رو چک می‌کنه و محتوای بد رو رد می‌کنه\n- هر گزارش تو اپ بررسی و جریمه خودکار اعمال می‌شه\n- DEVها و لیدرها می‌تونن بازیکنای مزاحم رو سایلنت کنن\n- DEVها می‌تونن موقت یا دائم بن کنن\n"
-    "سایلنت چطوریه؟\nDEV یا لیدر می‌تونه 4 ساعت سایلنتت کنه\\. چند بار سایلنت شی احتمالا بن می‌شی\\. پیام می‌بینی 'Unable to send message, try again in X minutes'\\. تا تموم شه نمی‌تونی تو اتاقای عمومی چت کنی یا بازی بسازی\\. اگه فکر می‌کنی ناعادلانه بود، از فرم فیدبک بگو\\.\\n"
-    "بن چطوریه؟\nDEV می‌تونه موقت یا دائم بنت کنه\\. اگه خیلی خطا شدید باشه، IP یا دیوایست هم بن می‌شه\\. بن دائم اکانتت حذف می‌شه\\. پیام می‌بینی 'You were banned'\\. می‌تونی از فرم درخواست تجدیدنظر کنی\\.\\n\\n"
-    "بج‌های خاص\n"
-    "لیدر کیه؟\nداوطلبایی هستن که جامعه‌شون رو نمایندگی می‌کنن\\. می‌تونن 4 ساعت سایلنت کنن ولی بن نمی‌کنن\\. کاراشون: ساخت جامعه، کمک به بازیکنا، ارتباط با DEVها، چک کردن چت عمومی\\. بج دارن که رنگش نشون‌دهنده جامعه‌شونه\\. از فرم فیدبک می‌تونی نظر بدی\\. توسط DEVها انتخاب می‌شن\\.\\n"
-    "دولوپر کیه؟\nکارمندای رسمی پلاتو\\. می‌تونن 4 ساعت سایلنت یا موقت/دائم بن کنن\\. بج خاص دارن\\.\\n\\n"
-    "چت پس\n"
-    "چت پس چیه؟\nیه بج که برای چت و بازی تو اکثر اتاقای عمومی لازمه\\.\\n"
-    "چرا اومده؟\nبرای کم کردن رفتارای منفی\\. راهای قبلی جواب*‌ دیگه جواب نداد، این بهتر کار کرده\\.\\n"
-    "چطور کار می‌کنه؟\nکسایی که دنبال اذیتن کمتر چت پس می‌گیرن، پس ما رو آدمای مشکل‌دار تمرکز می‌کنیم\\. تو اتاقای چت پس‌دار بهتر شده\\.\\n"
-    "کجاها لازمه؟\nاکثر اتاقای عمومی، جز اونایی که تو توضیحاتشون نوشته 'No Chat Pass Required'\\.\\n"
-    "نیاز دارم؟\nاگه می‌خوای تو اتاقای چت پس‌دار چت کنی یا بازی بسازی، آره\\.\\n"
-    "چطور بگیرم؟\n- قبل 5 دسامبر 2022 اگه 2000 سکه خریده یا گیفت گرفته باشی، داری\n- اکانت جدید یا از 16 ژوئن 2023 لاگین نکردی؟ 7 روز وقت داری Welcome Offer رو از Shop بخری\n- از Shop تو قسمت بج‌ها بخر\n- از دوستات بخواه گیفتت کنن\n"
-    "چطور استفاده کنم؟\nفقط باید داشته باشیش، لازم نیس فعالش کنی\\.\\n\\n"
-    "مبارزه با سوءاستفاده\n"
-    "پلاتو برای سوءاستفاده چیکار می‌کنه؟\nهدفش اینه همه بدون اذیت بازی کنن:\n"
-    "- Community Guidelines داره\n- تیم پشتیبانی: hello@platoapp\\.com\n- بلاک و گزارش تو اپ\n- moderation خودکار و انسانی\n- کنترل بازی توسط سازنده‌ها\n"
-    "چطور سوءاستفاده رو گزارش بدم؟\n- بلاک و گزارش کن، چت ضبط می‌شه\n- تو گروه خصوصی به ادمین بگو یا لفت بده\n- اگه ادامه داشت ایمیل بزن: Plato ID خودت و طرف، توضیح ماجرا، ویدیو اگه داری\n\n"
-    "اکانت و پروفایل\n"
-    "چرا نمی‌تونم با ایمیلم ثبت‌نام کنم؟\n- ایمیلتو چک کن\n- شاید قبلا ثبت شده، لاگین کن\n- یه ایمیل دیگه امتحان کن\n- مشکل داری؟ به hello@platoapp\\.com بگو\n"
-    "ثبت‌نام نکردم، چطور لاگین کنم؟\nنمی‌شه، باید ایمیل ثبت کرده باشی\\.\\n"
-    "به ایمیلم دسترسی ندارم، چطور لاگین کنم؟\nنمی‌شه، باید ایمیلتو برگردونی\\.\\n"
-    "چرا نمی‌تونم با ایمیلم لاگین کنم؟\n- ایمیلتو چک کن\n- اگه زیاد درخواست دادی 24 ساعت صبر کن\n- مشکل داری؟ ایمیل بزن\n"
-    "چطور ایمیلمو عوض کنم؟\nنمی‌شه، برای امنیت ثابته\\.\\n"
-    "پیامای خصوصیمو چطور برگردونم؟\nنمی‌شه، برای حریم خصوصی ذخیره نمی‌شن\\.\\n"
-    "چرا عکس پروفایلم رد شد؟\nاحتمالا محتوای بد داره، یه عکس دیگه بذار\\.\\n"
-    "چرا نمی‌تونم عکس پروفایلمو عوض کنم؟\nروزی 4 بار می‌شه، صبر کن\\.\\n"
-    "چرا Plato IDم رد شد؟\nکلمه بد داره یا Pips می‌خواد\\.\\n"
-    "چرا نمی‌تونم Plato IDمو دوباره عوض کنم؟\nشاید در دسترس نباشه یا قوانین رو نقض کنه\\.\\n"
-    "ID قبلیم کی آزاد می‌شه؟\nبین 24 تا 72 ساعت تصادفیه\\.\\n"
-    "IDم تو انتقال دزدیده شد، برمی‌گردونین؟\nپلاتو انتقال رو ساپورت نمی‌کنه، ریسک خودته\\.\\n"
-    "یه ID غیرفعال می‌خوام، آزاد می‌کنین؟\nگاهی آزاد می‌کنن، ولی درخواستی نه\\.\\n"
-    "PlatoBot رو چطور از لیست دوستام پاک کنم؟\nنمی‌شه، مهربونه!\n"
-    "آیتم رو از inventoryم چطور پاک کنم؟\nنمی‌شه، دائميه\\.\\n"
-    "چرا سکه‌هام غیبشون زد؟\nشاید ریفاند درخواست دادی، ایمیل بزن\\.\\n"
-    "چطور ببینم کی به اکانتم لاگینه؟\nبرو ⚙️ > Devices\\.\\n\\n"
-    "امنیت و حریم خصوصی\n"
-    "کی می‌تونه منو آنلاین ببینه؟\nدوستات و حریفات، اگه نمی‌خوای برو ⚙️ > Privacy > Show Online to Friends رو خاموش کن\\.\\n"
-    "چطور بلاک کنم؟\nرو پروفایل طرف بزن و Block رو انتخاب کن\\. چتشون قطع می‌شه و نمی‌تونن بازیاتو جوین کنن\\.\\n"
-    "سیاست حریم خصوصی چیه؟\nخیلی جدیه، اینجا بخون: https://platoapp\\.com/privacy\\n\\n"
-    "لینکای دانلود پلاتو\n- اندروید: https://play.google.com/store/apps/details?id=com.plato.android\n- iOS: https://apps.apple.com/app/plato-play-chat-together/id1054747306?ls=1\n"
-    "سلاطین پلاتو چیه؟\nاولین رسانه فارسی‌زبون پلاتو از 1400 با مدیریت بنیامین\\. اخبار و ترفندای پلاتو رو می‌دن و یه مینی‌اپ تلگرامی @PlatoDex دارن که رتبه‌بندی بازیکنا و آیتما رو نشون می‌ده\\ - کانال: @salatin_plato - گروه: @Gap_Plato\n\n"
-    "چند اکانت تو یه دستگاه\n"
-    "نسخه افلاطون: کنار نسخه اصلی نصب کن، از ربات بگیر\\.\\n"
-    "متاسفانه از تاریخ 28 فروردین 1404 پلاتو سرور های قدیمی پلاتو که میشد باهاشون کلون کرد رو غیرفعال کرد و دسترسی رو محدود کرد اگر میخوای چند اکانت داشته باشی حتما ایمیل روشون ثبت کن"
-    "سلاطین پلاتو ترفندای بیشتر تو @salatin_plato منتظرته! 😎\n\n"
-    "شما دیگر نمی توانید فرند ها یا دوستان کاربران دیگر رو ببینید چون اپلیکشن های قدیمی پلاتو که این کار رو میکردند غیرفعال شدند"
-    "این پیام آموزشی رو توی هر پاسخ تکرار نکن، فقط توی ذهنت نگه دار و بر اساسش عمل کن و پاسخ بده\\."
+    "شما دستیار هوشمند PatoBot هستی که به کاربران کمک می‌کنی که از اپلیکیشن Plato مشکلی داشتند کمکشون کنی. "
+    "خیلی کوتاه صحبت کن، اگر نیاز بود توضیح بده. به صورت خلاصه و خودمونی به سبک نسل Z صحبت کن. "
+    "با ایموجی صحبت می‌کنی، خیلی کوتاه جواب میدی و مفید. "
+    "به صورت نسل Z صحبت می‌کنی و دوستانه و جذاب و با کمی شوخی و از ایموجی استفاده کن. "
     "خلاصه به سوالات جواب بده خیلی بلند نباشه اگر کاربر درخواست توضیحات کرد بعد توضیح بده"
     "با پلاتو ویپ یا vip و پلاتو مگ یا mage میشه چندین اکانت ساخت و سکه جمع آوری کرد و برای کسایی هست که میخوان چند اکانت داشته باشند سکه جمع اوری کنند برای خودشون"
     "پلاتو مگ و ویپ چیکار میکنن؟ پلاتو نسخه اصلی قابلیت کلون شدن رو نداره افراد با این اپ ها میتونن چندین اکانت با این اپ ها بسازند و سکه روزانه را ذخیره و یا برای خودشون ایتم بخرند یا بفروشند فرق مگ و ویپ در این هست. افرادی که قبلا نسخه های قبلی مگ و ویپ داشتند میتونن با اپ های بالا که در کانال آپلود شده اپدیت کنن و به سکه های قفل شده در نسخه قبلی دسترسی‌ داشته باشند"
@@ -244,26 +316,22 @@ def process_api_queue():
         try:
             text, model, callback = api_queue.get()
             logger.info(f"Processing API request: {text[:50]}...")
-            url = f"https://text.pollinations.ai/{text}&model={model}"
+            
             for attempt in range(3):
                 try:
-                    response = requests.get(url)
-                    response.raise_for_status()
-                    logger.info(f"API response: {response.text[:50]}...")
-                    callback(response.text.strip())
+                    ai_response = asyncio.run(COPILOT_CLIENT.ask(text, language="fa"))
+                    if not ai_response or not str(ai_response).strip():
+                        raise ValueError("Empty response from Copilot.")
+                    logger.info(f"API response: {str(ai_response)[:50]}...")
+                    callback(str(ai_response).strip())
                     time.sleep(2)
                     break
-                except requests.HTTPError as e:
-                    if e.response.status_code == 429:
-                        logger.warning(f"Rate limit hit, retrying after {2 * (attempt + 1)} seconds...")
-                        time.sleep(2 * (attempt + 1))
-                        continue
-                    else:
-                        logger.error(f"HTTP Error: {e}")
-                        callback(None)
-                        break
-                except requests.RequestException as e:
-                    logger.error(f"Request Error: {e}")
+                except ValueError as e:
+                    logger.error(f"Response parsing error from Copilot: {e}")
+                    callback(None)
+                    break
+                except Exception as e:
+                    logger.error(f"Request Error when calling Copilot: {e}")
                     callback(None)
                     break
             else:
@@ -282,21 +350,8 @@ def should_respond_or_violate(text, bot_username, user_id, username, callback):
     violation_triggers = get_setting('violation_triggers', '')
     no_violation_triggers = get_setting('no_violation_triggers', '')
     logger.info(f"Analyzing message from {user_id} (@{username}): {text}")
-    prompt = f"""
-    شما یک دستیار هوشمند در گروه‌های تلگرامی هستید که به مدیریت گروه کمک می‌کنید و به سوالات کاربران پاسخ می‌دهید.
-    پیام زیر را تحلیل کنید و تصمیم بگیرید:
-    1. اگر پیام شامل کلمات کلیدی یا الگوهای زیر باشد: {response_triggers}، یا مستقیماً خطاب به ربات باشد (مثلاً با منشن یا در چت خصوصی)، پاسخ دهید.
-    2. اگر پیام شامل کلمات کلیدی زیر باشد: {no_response_triggers}، پاسخ ندهید.
-    3. اگر پیام شامل کلمات کلیدی یا الگوهای زیر باشد: {violation_triggers}، آن را به عنوان تخلف علامت‌گذاری کنید.
-    4. اگر پیام شامل کلمات کلیدی زیر باشد: {no_violation_triggers}، آن را به عنوان تخلف علامت‌گذاری نکنید.
-    همچنین، اگر پیام یک سوال مهم است که نیاز به پاسخ دارد، اما مطمئن نیستید که باید پاسخ دهید، از کاربر اجازه بگیرید.
-    متن پیام: {text}
-    پاسخ شما باید یکی از موارد زیر باشد:
-    - 'پاسخ بده': اگر باید مستقیماً پاسخ دهید
-    - 'اجازه بگیر': اگر باید از کاربر اجازه بگیرید
-    - 'تخلف': اگر پیام تخلف است
-    - 'هیچی': اگر هیچ کدام از موارد بالا صدق نمی‌کند
-    """
+    # Short prompt to avoid URI too long error
+    prompt = f"پیام: {text}\n\nتحلیل کن و یکی از این‌ها رو بگو: 'پاسخ بده' یا 'اجازه بگیر' یا 'تخلف' یا 'هیچی'"
     analyze_message(prompt, model='openai', callback=callback)
 
 def generate_response(text, user_id, username, callback, chat_history=None):
@@ -312,56 +367,15 @@ def generate_response(text, user_id, username, callback, chat_history=None):
     
     logger.info(f"Generating response for {user_id} (@{username}): {text}")
     
-    history_context = ""
-    if chat_history:
-        history_context = "\nتاریخچه چت اخیر:\n"
-        for msg in chat_history:
-            history_context += f"@{msg[1]}: {msg[2]}\n"
+    # Create a short prompt to avoid URI too long error
+    user_info = f"کاربر {user_fullname} (@{username})" if user_fullname else f"کاربر @{username}"
     
-    # Create a personalized prompt with user's information
-    user_info = f"نام و نام کاربری کاربر: @{username}" if not user_fullname else f"نام و نام کاربری کاربر: {user_fullname} (@{username})"
-    
-    prompt = f"""
-    شما دستیار هوشمند PlatoDex هستید و درمورد پلاتو به کاربران کمک میکنید و به صورت خودمونی جذاب و با ایموجی حرف میزنی به صورت نسل Z و کمی با طنز حرف بزن و شوخی کنه. به مشخصات آیتم‌های پلاتو دسترسی داری و می‌تونی به سوالات کاربر در مورد آیتم‌ها جواب بدی و راهنمایی کنی چطور با دستور /i مشخصات کامل رو بگیرن.
-    
-    {user_info}
-    متن و یا سوال و جواب کاربر: {text}
-    تاریخچه پیام کاربران :{history_context}
-    
-    به عنوان یک دستیار حرفه‌ای و دوستانه:
-    - لطفا در پاسخ از نام کاربر استفاده کن و اگر نام انگلیسی است به فارسی تبدیل کن
-    - پاسخ باید کوتاه، دقیق و جذاب باشد
-    - از ایموجی‌های مناسب استفاده کن
-    - با لحن نسل Z و دوستانه صحبت کن
-    - اگر سوال مرتبط با کلمات کلیدی ({response_triggers}) باشد، پاسخ مرتبط بده
-    - اگر نیاز است، هشدار دهید که برای اطلاعات دقیق‌تر با متخصص مشورت کنند
-    - اگر سوالی است که نیاز به اجازه کاربر دارد، از او اجازه بگیرید
-    - اگر سوال در مورد آیتم‌های پلاتو است، راهنمایی کن که از دستور /i استفاده کنند
-    - اگر سوال در مورد چند اکانت است، توضیح بده که از تاریخ 28 فروردین 1404 پلاتو سرورهای قدیمی غیرفعال شده‌اند
-    - اگر سوال در مورد دوستان است، توضیح بده که دیگر نمی‌توان دوستان کاربران دیگر را دید
-    - اگر سوال در مورد سلاطین پلاتو است، توضیح بده که اولین رسانه فارسی‌زبون پلاتو از 1400 با مدیریت بنیامین است
-    
-    مثال:
-    پیام: "سوال دارم"
-    پاسخ: "سلام [نام کاربر]! 😊 چطور می‌تونم کمکت کنم؟ هر سوالی داری بپرس، من اینجام تا راهنماییت کنم! 🎮✨"
-    """
+    prompt = f"{user_info} می‌پرسد: {text}\n\nشما دستیار هوشمند PlatBot تید و درمورد پلاتو به کاربران کمک می‌کنید. با ایموجی و به صورت خودمونی و طنز جواب بده. اگر سوال در مورد آیتم‌های پلاتو است، راهنمایی کن که از دستور /i استفاده کنند."
     analyze_message(prompt, model='openai', callback=callback)
 
 def generate_violation_reason(text, callback):
-    prompt = f"""
-    شما یک دستیار هوشمند در گروه‌های تلگرامی هستید که به مدیریت گروه کمک می‌کنید.
-    پیام زیر را تحلیل کنید و دلیل دقیق تخلف را توضیح دهید:
-    - دلیل باید واضح و حرفه‌ای باشد
-    - حداکثر 50 کلمه باشد
-    - از کلمات توهین‌آمیز استفاده نکنید
-    - دلیل باید به صورت مستقیم و بدون ابهام باشد
-    متن پیام: {text}
-    مثال:
-    پیام: "سلام به همه"
-    دلیل: پیام خالی یا بی‌محتوا
-    پیام: "لینک دانلود فیلم"
-    دلیل: ارسال لینک غیرمجاز و تبلیغات
-    """
+    # Short prompt to avoid URI too long error
+    prompt = f"پیام: {text}\n\nدلیل تخلف این پیام رو در حداکثر 50 کلمه بگو (بدون توهین):"
     analyze_message(prompt, model='openai', callback=callback)
 
 # --- دستورات ادمین و هندلرهای مدیریتی ---
@@ -576,6 +590,11 @@ async def webhook(request: Request):
     global application
     update = await request.json()
     update_obj = Update.de_json(update, application.bot)
+    
+    # Check if update_obj is valid
+    if not update_obj:
+        return {"status": "ok"}
+        
     update_id = update_obj.update_id
     logger.info(f"دریافت درخواست با update_id: {update_id}")
     async with PROCESSING_LOCK:
@@ -583,12 +602,21 @@ async def webhook(request: Request):
             logger.warning(f"درخواست تکراری با update_id: {update_id} - نادیده گرفته شد")
             return {"status": "ok"}
         PROCESSED_MESSAGES.add(update_id)
-    asyncio.create_task(application.process_update(update_obj))
+        
+    # Check if we have a valid message for message handlers
+    # Callback queries are handled separately by handlers but we need to be careful
+    # Not all updates have messages (e.g. callback_query, channel_post, etc.)
+    
+    try:
+        asyncio.create_task(application.process_update(update_obj))
+    except Exception as e:
+        logger.error(f"Error processing update: {e}")
+        
     return {"status": "ok"}
 
 @app.get("/")
 async def root():
-    return {"message": "PlatoDex Bot is running!"}
+    return {"message": "platodex Bot is running!"}
 
 @app.head("/webhook")
 async def webhook_head():
@@ -598,13 +626,6 @@ def clean_text(text):
     if not text:
         return ""
     text = text.replace("*", "").replace("`", "").replace("[", "").replace("]", "").replace("!", "!")
-    ad_texts = [
-        "Powered by Pollinations.AI free text APIs. Support our mission(https://pollinations.ai/redirect/kofi) to keep AI accessible for everyone.",
-        "توسط Pollinations.AI به صورت رایگان ارائه شده است. از مأموریت ما حمایت کنید(https://pollinations.ai/redirect/kofi) تا AI برای همه قابل دسترسی باشد."
-    ]
-    for ad_text in ad_texts:
-        if ad_text in text:
-            text = text.replace(ad_text, "").strip()
     return text.strip()
 
 # تعریف کلاس PlatoItem
@@ -715,6 +736,9 @@ def scrape_profile(player_link):
 
 # نمایش لیدربرد
 async def show_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+        
     message_id = update.message.message_id
     async with PROCESSING_LOCK:
         if message_id in PROCESSED_MESSAGES:
@@ -895,549 +919,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     user_name = update.message.from_user.first_name
     welcome_message = clean_text(
-        f"سلام {user_name}!\nبه PlatoDex خوش اومدی - مرکز بازی‌های Plato!\n"
-        "• آیتم‌ها رو ببین 🎲\n• رتبه‌بندی بازیکن‌ها رو چک کن 🏆\n• اخبار رو دنبال کن 🎯"
+        f"👋 سلام {user_name}!\n\n"
+        "🎮 به Platodex خوش اومدی! یه ربات کامل برای همه چیز پلاتو 🚀\n\n"
+        "✨ امکانات ربات:\n"
+        "🔍 جستجوی سریع آیتم‌ها و مشاهده جزئیات\n"
+        "🤖 چت هوشمند با هوش مصنوعی\n"
+        "🖼️ حذف بک‌گراند عکس\n"
+        "📱 مینی اپلیکیشن تعاملی\n\n"
+        "چی می‌خوای شروع کنیم؟ 😎"
     )
     keyboard = [
-        [InlineKeyboardButton("Run App 📱", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
-        [InlineKeyboardButton("Search Items 🔍", callback_data="search_items")],
-        [InlineKeyboardButton("Chat with AI 🤖", callback_data="chat_with_ai")],
-        [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")]
+        [InlineKeyboardButton("📱 اجرا مینی اپ", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
+        [
+            InlineKeyboardButton("🔍 سرچ آیتم", callback_data="search_items"),
+            InlineKeyboardButton("🤖 چت با هوش مصنوعی", callback_data="chat_with_ai")
+        ],
+        [InlineKeyboardButton("🔧 ابزارها", callback_data="tools_menu")]
     ]
     await update.message.reply_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
     return ConversationHandler.END
-
-async def start_generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    context.user_data.clear()
-    keyboard = [
-        [InlineKeyboardButton("512x512", callback_data="size_512x512")],
-        [InlineKeyboardButton("1024x1024", callback_data="size_1024x1024")],
-        [InlineKeyboardButton("1280x720", callback_data="size_1280x720")],
-        [InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(
-        clean_text("🖼️ Generate Image Mode Activated!\n\nلطفاً سایز تصویر مورد نظر خود را انتخاب کنید:"),
-        reply_markup=reply_markup
-    )
-    return SELECT_SIZE
-
-async def select_size(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    size = query.data
-    if size == "size_512x512":
-        context.user_data["width"] = 512
-        context.user_data["height"] = 512
-    elif size == "size_1024x1024":
-        context.user_data["width"] = 1024
-        context.user_data["height"] = 1024
-    elif size == "size_1280x720":
-        context.user_data["width"] = 1280
-        context.user_data["height"] = 720
-    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(
-        clean_text(f"سایز تصویر انتخاب شد: {context.user_data['width']}x{context.user_data['height']}\n\nلطفاً توضیحات تصویر (پرامپت) را وارد کنید. مثلاً: 'A cat in a forest'"),
-        reply_markup=reply_markup
-    )
-    return GET_PROMPT
-
-async def get_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    prompt = update.message.text.strip()
-    if not prompt:
-        await update.message.reply_text(clean_text("لطفاً یک توضیح برای تصویر وارد کنید!"))
-        return GET_PROMPT
-    
-    width = context.user_data["width"]
-    height = context.user_data["height"]
-    seed = random.randint(1, 999999)
-    
-    loading_message = await update.message.reply_text(clean_text("🖌️ در حال طراحی عکس... لطفاً صبر کنید."))
-    
-    api_url = f"{IMAGE_API_URL}{prompt}?width={width}&height={height}&nologo=true&seed={seed}"
-    try:
-        response = requests.get(api_url, timeout=30)
-        if response.status_code == 200:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
-            keyboard = [
-                [InlineKeyboardButton("↩️ برگشت", callback_data="retry_generate_image")],
-                [InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]
-            ]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await update.message.reply_photo(photo=response.content, reply_markup=reply_markup)
-        else:
-            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
-            await update.message.reply_text(clean_text("مشکلی در تولید تصویر پیش آمد. لطفاً دوباره امتحان کنید."))
-    except Exception as e:
-        await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=loading_message.message_id)
-        await update.message.reply_text(clean_text("خطایی رخ داد. لطفاً بعداً امتحان کنید."))
-        logger.error(f"خطا در تولید تصویر: {e}")
-    
-    return ConversationHandler.END
-
-async def retry_generate_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    keyboard = [
-        [InlineKeyboardButton("512x512", callback_data="size_512x512")],
-        [InlineKeyboardButton("1024x1024", callback_data="size_1024x1024")],
-        [InlineKeyboardButton("1280x720", callback_data="size_1280x720")],
-        [InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(
-        clean_text("🖼️ Generate Image Mode Activated!\n\nلطفاً سایز تصویر مورد نظر خود را انتخاب کنید:"),
-        reply_markup=reply_markup
-    )
-    return SELECT_SIZE
-
-async def regenerate_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    logger.info(f"دکمه تولید مجدد تصویر کلیک شد! callback_data: {query.data}")
-    
-    if not query.data.startswith("regenerate_image_"):
-        logger.error("callback_data نامعتبر است!")
-        await query.message.reply_text(clean_text("خطایی رخ داد! لطفاً دوباره امتحان کنید. 😅"))
-        return ConversationHandler.END
-    
-    # استخراج پرامپت از callback_data یا از context.user_data
-    callback_id = query.data
-    
-    # بررسی اگر mapping برای این callback_id در context.user_data وجود دارد
-    callback_mapping = context.user_data.get("callback_to_prompt", {})
-    api_prompt = callback_mapping.get(callback_id, "")
-    
-    # اگر پرامپت در callback_mapping نباشد، سعی می‌کنیم از context.user_data استفاده کنیم
-    if not api_prompt:
-        logger.warning(f"پرامپت برای {callback_id} در callback_mapping پیدا نشد، از api_prompt استفاده می‌شود")
-        api_prompt = context.user_data.get("api_prompt", "")
-    
-    original_prompt = context.user_data.get("original_prompt", "")
-    
-    # اگر هنوز پرامپتی پیدا نشد، خطا نمایش می‌دهیم
-    if not api_prompt:
-        logger.error("پرامپت برای بازتولید تصویر پیدا نشد!")
-        await query.message.reply_text(clean_text("متأسفانه نمی‌توانم پرامپت را پیدا کنم. لطفاً دوباره تلاش کنید."))
-        return ConversationHandler.END
-    
-    thread_id = query.message.message_thread_id if hasattr(query.message, 'is_topic_message') and query.message.is_topic_message else None
-    chat_id = query.message.chat_id
-    
-    last_image_message_id = context.user_data.get("last_image_message_id")
-    if last_image_message_id:
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=last_image_message_id)
-            logger.info(f"تصویر قبلی با ID {last_image_message_id} حذف شد.")
-        except Exception as e:
-            logger.warning(f"خطا در حذف تصویر قبلی: {e}")
-            # فقط یک پیام هشدار نمایش می‌دهیم، اما عملیات را ادامه می‌دهیم
-    
-    loading_message = await context.bot.send_message(
-        chat_id=chat_id,
-        text=clean_text("🖌️ در حال طراحی مجدد عکس... لطفاً صبر کنید."),
-        message_thread_id=thread_id
-    )
-    
-    # ذخیره کردن آیدی پیام بارگذاری برای حذف بعدی
-    loading_message_id = loading_message.message_id
-    context.user_data["loading_message_id"] = loading_message_id
-    
-    # تولید seed تصادفی
-    seed = random.randint(1, 1000000)
-    
-    # سیستم retry برای مدیریت خطای 502
-    max_retries = 3
-    retry_delay = 2  # ثانیه
-    
-    for attempt in range(max_retries):
-        try:
-            # ایجاد URL با seed مختلف برای هر تلاش
-            retry_seed = seed + attempt
-            api_url = f"{IMAGE_API_URL}{api_prompt}?width=1024&height=1024&nologo=true&seed={retry_seed}"
-            
-            logger.info(f"تلاش {attempt + 1}/{max_retries} برای تولید مجدد تصویر با پرامپت: {api_prompt[:50]}...")
-            
-            async with asyncio.timeout(40):  # تایم‌اوت طولانی‌تر برای API
-                response = requests.get(api_url, timeout=40)
-            
-            if response.status_code == 200:
-                # تصویر با موفقیت تولید شد
-                logger.info(f"تصویر با موفقیت تولید شد (تلاش {attempt + 1})")
-                
-                try:
-                    await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
-                    logger.info(f"پیام بارگذاری با ID {loading_message_id} حذف شد.")
-                except Exception as e:
-                    logger.warning(f"خطا در حذف پیام بارگذاری: {e}")
-                
-                # حداکثر طول پرامپت برای نمایش در کپشن
-                display_prompt = original_prompt
-                if len(display_prompt) > 500:
-                    display_prompt = display_prompt[:497] + "..."
-                
-                # تولید callback_data امن جدید
-                safe_callback_data = generate_safe_callback_data(api_prompt)
-                
-                # آپدیت کردن مپینگ callback_data
-                callback_mapping = context.user_data.get("callback_to_prompt", {})
-                callback_mapping[safe_callback_data] = api_prompt
-                context.user_data["callback_to_prompt"] = callback_mapping
-                
-                keyboard = [[InlineKeyboardButton("🔄 طراحی مجدد تصویر", callback_data=safe_callback_data)]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                original_message_id = context.user_data.get("original_message_id", query.message.reply_to_message.message_id)
-                caption_text = clean_text(f"🪄 پرامت تصویر ایجاد شده شما:\n\n{display_prompt}\n\n@PlatoDex")
-                
-                message = await context.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=response.content,
-                    caption=caption_text,
-                    reply_markup=reply_markup,
-                    message_thread_id=thread_id,
-                    reply_to_message_id=original_message_id
-                )
-                context.user_data["last_image_message_id"] = message.message_id
-                logger.info(f"تصویر جدید با message_id {message.message_id} ارسال شد.")
-                
-                # اگر موفق شد از حلقه خارج می‌شویم
-                break
-                
-            elif response.status_code == 502:
-                # خطای 502، سعی مجدد
-                logger.warning(f"خطای 502 از API در تلاش {attempt + 1}. در حال تلاش مجدد...")
-                
-                # به کاربر اطلاع بدهیم که در حال تلاش مجدد هستیم
-                if attempt < max_retries - 1:  # اگر این آخرین تلاش نیست
-                    try:
-                        await context.bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=loading_message_id,
-                            text=clean_text(f"🖌️ خطای سرور (502)! تلاش مجدد {attempt + 2}/{max_retries}... لطفاً صبر کنید.")
-                        )
-                    except Exception as e:
-                        logger.warning(f"خطا در به‌روزرسانی پیام بارگذاری: {e}")
-                    
-                    # صبر قبل از تلاش بعدی
-                    await asyncio.sleep(retry_delay * (attempt + 1))
-                else:
-                    # این آخرین تلاش بود و باز هم شکست خورد
-                    raise Exception("همه تلاش‌ها با خطای 502 مواجه شدند.")
-                    
-            else:
-                # خطاهای دیگر
-                error_message = f"خطای {response.status_code} از API دریافت شد."
-                logger.error(error_message)
-                raise Exception(error_message)
-                
-        except asyncio.TimeoutError:
-            logger.warning(f"تایم‌اوت در تلاش {attempt + 1} برای تولید مجدد تصویر.")
-            
-            # به کاربر اطلاع بدهیم که تایم‌اوت رخ داده
-            if attempt < max_retries - 1:
-                try:
-                    await context.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=loading_message_id,
-                        text=clean_text(f"🖌️ تایم‌اوت! تلاش مجدد {attempt + 2}/{max_retries}... لطفاً صبر کنید.")
-                    )
-                except Exception as e:
-                    logger.warning(f"خطا در به‌روزرسانی پیام بارگذاری: {e}")
-                
-                await asyncio.sleep(retry_delay * (attempt + 1))
-            else:
-                # این آخرین تلاش بود و باز هم شکست خورد
-                raise Exception("همه تلاش‌ها با تایم‌اوت مواجه شدند.")
-                
-        except Exception as e:
-            # اگر این آخرین تلاش نیست، دوباره تلاش می‌کنیم
-            if attempt < max_retries - 1:
-                logger.warning(f"خطا در تلاش {attempt + 1}: {e}. در حال تلاش مجدد...")
-                
-                try:
-                    await context.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=loading_message_id,
-                        text=clean_text(f"🖌️ خطا رخ داد! تلاش مجدد {attempt + 2}/{max_retries}... لطفاً صبر کنید.")
-                    )
-                except Exception as edit_error:
-                    logger.warning(f"خطا در به‌روزرسانی پیام بارگذاری: {edit_error}")
-                
-                await asyncio.sleep(retry_delay * (attempt + 1))
-            else:
-                # اگر این آخرین تلاش بود، خطا را نمایش می‌دهیم
-                logger.error(f"همه تلاش‌ها برای تولید مجدد تصویر با خطا مواجه شدند: {e}")
-                raise
-    else:
-        # اگر از حلقه خارج شدیم بدون اینکه تصویر را با موفقیت ارسال کنیم
-        # این حالت زمانی رخ می‌دهد که همه تلاش‌ها شکست بخورند اما exception هم پرتاب نشود
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
-        except Exception as e:
-            logger.warning(f"خطا در حذف پیام بارگذاری پس از شکست همه تلاش‌ها: {e}")
-            
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=clean_text("متأسفانه همه تلاش‌ها برای تولید تصویر با شکست مواجه شدند. لطفاً بعداً دوباره امتحان کنید."),
-            message_thread_id=thread_id
-        )
-            
-    # مدیریت خطا برای کل تابع
-    try:
-        pass  # اینجا کاری انجام نمی‌دهیم، فقط برای مدیریت خطاهای احتمالی است
-    except Exception as e:
-        logger.error(f"خطای نهایی در تولید مجدد تصویر گروه: {e}")
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
-        except Exception as del_e:
-            logger.warning(f"خطا در حذف پیام بارگذاری در حالت خطا: {del_e}")
-        
-        error_message = "خطایی رخ داد. لطفاً بعداً امتحان کنید."
-        if "502" in str(e):
-            error_message = "خطای سرور (502). پلتفرم تولید تصویر در حال حاضر در دسترس نیست، لطفاً بعداً امتحان کنید."
-        elif "timed out" in str(e).lower() or "timeout" in str(e).lower():
-            error_message = "زمان پاسخگویی API به پایان رسید. لطفاً با پرامپت کوتاه‌تر امتحان کنید یا بعداً تلاش کنید."
-        
-        await context.bot.send_message(
-            chat_id=chat_id,
-            text=clean_text(error_message),
-            message_thread_id=thread_id
-        )
-    
-    return ConversationHandler.END
-
-async def start_group_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message_id = update.message.message_id
-    async with PROCESSING_LOCK:
-        if message_id in PROCESSED_MESSAGES:
-            logger.warning(f"پیام تکراری در گروه با message_id: {message_id} - نادیده گرفته شد")
-            return
-        PROCESSED_MESSAGES.add(message_id)
-    
-    chat_id = update.effective_chat.id
-    try:
-        await context.bot.get_chat(chat_id)
-    except Exception as e:
-        logger.error(f"خطا در دسترسی به چت {chat_id}: {e}")
-        if "Forbidden" in str(e):
-            await update.message.reply_text(clean_text("متأسفم، من از این گروه بیرون انداخته شدم! 😕 دوباره منو اد کن تا کمکت کنم."))
-        else:
-            await update.message.reply_text(clean_text("یه مشکلی پیش اومد، نمی‌تونم چت رو پیدا کنم! 😅"))
-        return
-    
-    thread_id = update.message.message_thread_id if hasattr(update.message, 'is_topic_message') and update.message.is_topic_message else None
-    
-    if not context.args:
-        await update.message.reply_text(
-            clean_text(
-                "🖌️ لطفاً متنی که می‌خوای به عکس تبدیل بشه رو به انگلیسی بفرست!\n\n"
-                "مثلاً:\n/p a woman"
-            ),
-            message_thread_id=thread_id
-        )
-        return
-    
-    # اینجا متن رو می‌گیریم و اگر طولانی بود کوتاهش می‌کنیم
-    prompt = " ".join(context.args).strip()
-    original_prompt = prompt
-    
-    if not prompt:
-        await update.message.reply_text(
-            clean_text("پرامپت خالیه! یه توضیح برای تصویر بده. مثلاً: /p A flying car"),
-            message_thread_id=thread_id
-        )
-        return
-    
-    # ذخیره پرامپت اصلی برای استفاده در پیام
-    if len(prompt) > 3000:
-        shortened_prompt = prompt[:3000]
-        logger.warning(f"پرامپت بیش از حد طولانی است ({len(prompt)} کاراکتر). کوتاه شد به 3000 کاراکتر.")
-        prompt = shortened_prompt
-    
-    # برای API ما باید متن رو به یک اندازه مناسب کوتاه کنیم (حداکثر 1000 کاراکتر)
-    api_prompt = prompt
-    if len(prompt) > 1000:
-        # برای API فقط 1000 کاراکتر اول استفاده می‌شود
-        api_prompt = prompt[:1000]
-        logger.info(f"پرامپت برای API به 1000 کاراکتر کوتاه شد")
-    
-    loading_message = await update.message.reply_text(
-        clean_text("🖌️ در حال طراحی عکس... لطفاً صبر کنید."),
-        message_thread_id=thread_id
-    )
-    
-    # ذخیره کردن آیدی پیام بارگذاری برای حذف بعدی
-    loading_message_id = loading_message.message_id
-    context.user_data["loading_message_id"] = loading_message_id
-    
-    # تولید seed تصادفی
-    seed = random.randint(1, 999999)
-    
-    # سیستم retry برای مدیریت خطای 502
-    max_retries = 3
-    retry_delay = 2  # ثانیه
-    
-    for attempt in range(max_retries):
-        try:
-            # ایجاد URL با seed مختلف برای هر تلاش
-            retry_seed = seed + attempt
-            api_url = f"{IMAGE_API_URL}{api_prompt}?width=1024&height=1024&nologo=true&seed={retry_seed}"
-            
-            logger.info(f"تلاش {attempt + 1}/{max_retries} برای تولید تصویر با پرامپت: {api_prompt[:50]}...")
-            
-            async with asyncio.timeout(40):  # تایم‌اوت طولانی‌تر برای API
-                response = requests.get(api_url, timeout=40)
-            
-            if response.status_code == 200:
-                # تصویر با موفقیت تولید شد
-                logger.info(f"تصویر با موفقیت تولید شد (تلاش {attempt + 1})")
-                
-                # اول پیام بارگذاری رو پاک می‌کنیم
-                try:
-                    await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
-                    logger.info(f"پیام بارگذاری با ID {loading_message_id} حذف شد.")
-                except Exception as e:
-                    logger.warning(f"خطا در حذف پیام بارگذاری: {e}")
-                
-                # حداکثر طول پرامپت برای نمایش در کپشن
-                display_prompt = original_prompt
-                if len(display_prompt) > 500:
-                    display_prompt = display_prompt[:497] + "..."
-                
-                # تولید callback_data امن
-                safe_callback_data = generate_safe_callback_data(api_prompt)
-                
-                # ذخیره پرامپت‌ها برای استفاده در تولید مجدد
-                callback_mapping = context.user_data.get("callback_to_prompt", {})
-                callback_mapping[safe_callback_data] = api_prompt
-                context.user_data["callback_to_prompt"] = callback_mapping
-                context.user_data["original_prompt"] = original_prompt
-                context.user_data["api_prompt"] = api_prompt
-                
-                keyboard = [[InlineKeyboardButton("🔄 طراحی مجدد تصویر", callback_data=safe_callback_data)]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                
-                # ارسال تصویر با کپشن مناسب
-                caption_text = clean_text(f"🪄 پرامت تصویر ایجاد شده شما:\n\n{display_prompt}\n\n@PlatoDex")
-                
-                message = await context.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=response.content,
-                    caption=caption_text,
-                    reply_markup=reply_markup,
-                    message_thread_id=thread_id,
-                    reply_to_message_id=update.message.message_id
-                )
-                context.user_data["last_image_message_id"] = message.message_id
-                context.user_data["original_message_id"] = update.message.message_id
-                
-                # اگر موفق شد از حلقه خارج می‌شویم
-                break
-                
-            elif response.status_code == 502:
-                # خطای 502، سعی مجدد
-                logger.warning(f"خطای 502 از API در تلاش {attempt + 1}. در حال تلاش مجدد...")
-                
-                # به کاربر اطلاع بدهیم که در حال تلاش مجدد هستیم
-                if attempt < max_retries - 1:  # اگر این آخرین تلاش نیست
-                    try:
-                        await context.bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=loading_message_id,
-                            text=clean_text(f"🖌️ خطای سرور (502)! تلاش مجدد {attempt + 2}/{max_retries}... لطفاً صبر کنید.")
-                        )
-                    except Exception as e:
-                        logger.warning(f"خطا در به‌روزرسانی پیام بارگذاری: {e}")
-                    
-                    # صبر قبل از تلاش بعدی
-                    await asyncio.sleep(retry_delay * (attempt + 1))
-                else:
-                    # این آخرین تلاش بود و باز هم شکست خورد
-                    raise Exception("همه تلاش‌ها با خطای 502 مواجه شدند.")
-                    
-            else:
-                # خطاهای دیگر
-                error_message = f"خطای {response.status_code} از API دریافت شد."
-                logger.error(error_message)
-                raise Exception(error_message)
-                
-        except asyncio.TimeoutError:
-            logger.warning(f"تایم‌اوت در تلاش {attempt + 1} برای تولید تصویر.")
-            
-            # به کاربر اطلاع بدهیم که تایم‌اوت رخ داده
-            if attempt < max_retries - 1:
-                try:
-                    await context.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=loading_message_id,
-                        text=clean_text(f"🖌️ تایم‌اوت! تلاش مجدد {attempt + 2}/{max_retries}... لطفاً صبر کنید.")
-                    )
-                except Exception as e:
-                    logger.warning(f"خطا در به‌روزرسانی پیام بارگذاری: {e}")
-                
-                await asyncio.sleep(retry_delay * (attempt + 1))
-            else:
-                # این آخرین تلاش بود و باز هم شکست خورد
-                raise Exception("همه تلاش‌ها با تایم‌اوت مواجه شدند.")
-                
-        except Exception as e:
-            # اگر این آخرین تلاش نیست، دوباره تلاش می‌کنیم
-            if attempt < max_retries - 1:
-                logger.warning(f"خطا در تلاش {attempt + 1}: {e}. در حال تلاش مجدد...")
-                
-                try:
-                    await context.bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=loading_message_id,
-                        text=clean_text(f"🖌️ خطا رخ داد! تلاش مجدد {attempt + 2}/{max_retries}... لطفاً صبر کنید.")
-                    )
-                except Exception as edit_error:
-                    logger.warning(f"خطا در به‌روزرسانی پیام بارگذاری: {edit_error}")
-                
-                await asyncio.sleep(retry_delay * (attempt + 1))
-            else:
-                # اگر این آخرین تلاش بود، خطا را نمایش می‌دهیم
-                logger.error(f"همه تلاش‌ها برای تولید تصویر با خطا مواجه شدند: {e}")
-                raise
-    else:
-        # اگر از حلقه خارج شدیم بدون اینکه تصویر را با موفقیت ارسال کنیم
-        # این حالت زمانی رخ می‌دهد که همه تلاش‌ها شکست بخورند اما exception هم پرتاب نشود
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
-        except Exception as e:
-            logger.warning(f"خطا در حذف پیام بارگذاری پس از شکست همه تلاش‌ها: {e}")
-            
-        await update.message.reply_text(
-            clean_text("متأسفانه همه تلاش‌ها برای تولید تصویر با شکست مواجه شدند. لطفاً بعداً دوباره امتحان کنید."),
-            message_thread_id=thread_id
-        )
-            
-    # مدیریت خطا برای کل تابع
-    # این بخش فقط در صورتی اجرا می‌شود که exception از حلقه for بالا رها شود
-    try:
-        pass  # اینجا کاری انجام نمی‌دهیم، فقط برای مدیریت خطاهای احتمالی است
-    except Exception as e:
-        # خطای عمومی در پردازش درخواست
-        logger.error(f"خطای نهایی در تولید تصویر گروه: {e}")
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=loading_message_id)
-        except Exception as del_e:
-            logger.warning(f"خطا در حذف پیام بارگذاری: {del_e}")
-        
-        error_message = "خطایی رخ داد. لطفاً بعداً امتحان کنید."
-        if "502" in str(e):
-            error_message = "خطای سرور (502). پلتفرم تولید تصویر در حال حاضر در دسترس نیست، لطفاً بعداً امتحان کنید."
-        elif "timed out" in str(e).lower() or "timeout" in str(e).lower():
-            error_message = "زمان پاسخگویی API به پایان رسید. لطفاً با پرامپت کوتاه‌تر امتحان کنید یا بعداً تلاش کنید."
-        
-        await update.message.reply_text(
-            clean_text(error_message),
-            message_thread_id=thread_id
-        )
 
 async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.inline_query.query
@@ -1456,7 +956,7 @@ async def inline_query(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📃 توضیحات: {item['description']}\n"
                 f"\n"
                 f"💸 قیمت: {price_info}\n"
-                f"📣 @PlatoDex"
+                f"📣 @platodex"
             )
             results.append(
                 InlineQueryResultArticle(
@@ -1485,7 +985,7 @@ async def handle_inline_selection(update: Update, context: ContextTypes.DEFAULT_
         f"📃 توضیحات: {item['description']}\n"
         f"\n"
         f"💸 قیمت: {price_info}\n"
-        f"📣 @PlatoDex"
+        f"📣 @platodex"
     )
     
     if item["images"]:
@@ -1512,7 +1012,7 @@ async def start_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["page"] = 0
     keyboard = [
         [InlineKeyboardButton("🔍 جست‌وجو با اسم", callback_data="search_by_name")],
-        [InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]
+        [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
@@ -1525,7 +1025,7 @@ async def start_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def search_by_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+    keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await query.edit_message_text(
         clean_text("🔍 لطفاً اسم آیتم رو بفرست!"),
@@ -1534,6 +1034,9 @@ async def search_by_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SEARCH_ITEM
 
 async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return SEARCH_ITEM
+        
     message_id = update.message.message_id
     async with PROCESSING_LOCK:
         if message_id in PROCESSED_MESSAGES:
@@ -1545,7 +1048,7 @@ async def process_item_search(update: Update, context: ContextTypes.DEFAULT_TYPE
     matching_items = [item for item in EXTRACTED_ITEMS if user_input in item["name"].lower() or user_input in item["category"].lower()]
     
     if not matching_items:
-        keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+        keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
         await update.message.reply_text(clean_text("هیچ آیتمی پیدا نشد! 😕"), reply_markup=InlineKeyboardMarkup(keyboard))
         return SEARCH_ITEM
     
@@ -1564,7 +1067,7 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
     if not matching_items:
         logger.warning("No matching items found in user_data")
         if update.callback_query and update.callback_query.message:
-            keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+            keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
             await update.callback_query.message.reply_text(
                 clean_text("هیچ آیتمی پیدا نشد! 😕"), 
                 reply_markup=InlineKeyboardMarkup(keyboard)
@@ -1600,7 +1103,7 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
             f"📃 توضیحات: {item['description']}\n"
             f"\n"
             f"💸 قیمت: {price_info}\n"
-            f"📣 @PlatoDex"
+            f"📣 @platodex"
         )
         keyboard = [[InlineKeyboardButton("↩️ برگشت به لیست آیتم‌ها", callback_data="back_to_items")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1662,7 +1165,7 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
     if is_group:
         keyboard.append([InlineKeyboardButton("🔙 برگشت به دسته‌بندی‌ها", callback_data="back_to_categories_group")])
     elif not is_group:
-        keyboard.append([InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")])
+        keyboard.append([InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     message_text = clean_text(f"این آیتم‌ها رو پیدا کردم (صفحه {page + 1} از {total_pages})، کدوم رو می‌خوای؟ 👇")
@@ -1752,7 +1255,7 @@ async def send_paginated_items(update: Update, context: ContextTypes.DEFAULT_TYP
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text=clean_text("مشکلی در نمایش آیتم‌ها پیش آمد. لطفاً دوباره امتحان کنید."),
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]),
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]),
                     message_thread_id=thread_id
                 )
         except Exception:
@@ -1821,7 +1324,7 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📃 توضیحات: {item['description']}\n"
         f"\n"
         f"💸 قیمت: {price_info}\n"
-        f"📣 @PlatoDex"
+        f"📣 @platodex"
     )
     
     keyboard = [[InlineKeyboardButton("↩️ برگشت به لیست آیتم‌ها", callback_data="back_to_items")]]
@@ -1864,7 +1367,7 @@ async def select_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in select_item: {e}")
         try:
             # Fallback message if everything else fails
-            keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+            keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=clean_text("مشکلی در نمایش جزئیات آیتم پیش آمد. لطفاً دوباره امتحان کنید."),
@@ -1910,7 +1413,7 @@ async def back_to_items(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
         else:
             # If there are no matching items in user_data, go back to home
-            keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+            keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
             await context.bot.send_message(
                 chat_id=chat_id,
                 text=clean_text("متأسفانه لیست آیتم‌ها از دست رفته است. به منوی اصلی برگردید."),
@@ -1920,7 +1423,7 @@ async def back_to_items(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in back_to_items: {e}")
         try:
             # Fallback message if everything else fails
-            keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+            keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
             await context.bot.send_message(
                 chat_id=query.message.chat_id,
                 text=clean_text("مشکلی در بازگشت به لیست آیتم‌ها پیش آمد. لطفاً دوباره امتحان کنید."),
@@ -1985,7 +1488,7 @@ async def process_item_in_group(update: Update, context: ContextTypes.DEFAULT_TY
             f"📃 توضیحات: {item['description']}\n"
             f"\n"
             f"💸 قیمت: {price_info}\n"
-            f"📣 @PlatoDex"
+            f"📣 @platodex"
         )
         if item["images"]:
             await update.message.reply_photo(
@@ -2016,7 +1519,7 @@ async def send_paginated_categories(update: Update, context: ContextTypes.DEFAUL
     if not categories:
         logger.warning("No categories found in user_data")
         if update.callback_query and update.callback_query.message:
-            keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+            keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
             await update.callback_query.message.reply_text(
                 clean_text("هیچ دسته‌بندی پیدا نشد! 😕"), 
                 reply_markup=InlineKeyboardMarkup(keyboard)
@@ -2056,7 +1559,7 @@ async def send_paginated_categories(update: Update, context: ContextTypes.DEFAUL
     if is_group:
         keyboard.append([InlineKeyboardButton("🔙 برگشت به دسته‌بندی‌ها", callback_data="back_to_categories_group")])
     elif not is_group:
-        keyboard.append([InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")])
+        keyboard.append([InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     message_text = clean_text(f"دسته‌بندی‌ها (صفحه {page + 1} از {total_pages})، کدوم رو می‌خوای؟ 👇")
@@ -2160,7 +1663,7 @@ async def send_paginated_categories(update: Update, context: ContextTypes.DEFAUL
                 await context.bot.send_message(
                     chat_id=chat_id,
                     text=clean_text("مشکلی در نمایش دسته‌بندی‌ها پیش آمد. لطفاً دوباره امتحان کنید."),
-                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]])
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]])
                 )
         except Exception:
             pass  # If even this fails, just silently give up
@@ -2245,7 +1748,7 @@ async def select_group_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📃 توضیحات: {item['description']}\n"
         f"\n"
         f"💸 قیمت: {price_info}\n"
-        f"📣 @PlatoDex"
+        f"📣 @platodex"
     )
     
     try:
@@ -2496,7 +1999,7 @@ async def handle_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
             thread_id = context.user_data.get("group_thread_id") if is_group else None
             await update.callback_query.message.reply_text(
                 clean_text("مشکلی در تغییر صفحه پیش آمد. لطفاً دوباره امتحان کنید."),
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]),
                 message_thread_id=thread_id
             )
         return SELECT_CATEGORY if "_categories" in query.data else SEARCH_ITEM
@@ -2509,12 +2012,18 @@ async def chat_with_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["mode"] = "ai_chat"
     context.user_data["chat_history"] = []
-    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+    keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(
-        clean_text("🤖 چت با هوش مصنوعی فعال شد!\n\nهر چی می‌خوای بگو، من یادم می‌مونه چی گفتی! 😎"),
-        reply_markup=reply_markup
-    )
+    try:
+        await query.edit_message_text(
+            clean_text("🤖 چت با هوش مصنوعی فعال شد!\n\nهر چی می‌خوای بگو، من یادم می‌مونه چی گفتی! 😎"),
+            reply_markup=reply_markup
+        )
+    except Exception:
+        await query.message.reply_text(
+            clean_text("🤖 چت با هوش مصنوعی فعال شد!\n\nهر چی می‌خوای بگو، من یادم می‌مونه چی گفتی! 😎"),
+            reply_markup=reply_markup
+        )
     return ConversationHandler.END
 
 async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2529,40 +2038,92 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
     chat_history = context.user_data.get("chat_history", [])
     
-    # Prepare the system message with user information
-    system_message = SYSTEM_MESSAGE
+    # Build a short prompt - only send user message to avoid URI too long error
+    # Include user name if available
     if user_fullname:
-        system_message = f"نام و نام خانوادگی کاربر: {user_fullname}\n" + SYSTEM_MESSAGE + "\nلطفا در پاسخ‌های خود از نام کاربر استفاده کنید و اگر نام انگلیسی است به فارسی تبدیل کنید."
+        prompt = f"کاربر {user_fullname} می‌پرسد: {user_message}\n\nشما دستیار هوشمند PatoBot هستی که به کاربران کمک می‌کنی که از اپلیکیشن Plato مشکلی داشتند کمکشون کنی. خیلی کوتاه صحبت کن، اگر نیاز بود توضیح بده.ایموجی و به صورت خودمونی و طنز جواب بده، به صورت خلاصه و خودمونی به سبک نسل Z صحبت کن."
+    else:
+        prompt = f"سوال: {user_message}\n\nشما دستیار هوشمند PatoBot هستی که به کاربران کمک می‌کنی که از اپلیکیشن Plato مشکلی داشتند کمکشون کنی. خیلی کوتاه صحبت کن،ایموجی و به صورت خودمونی و طنز جواب بده، اگر نیاز بود توضیح بده. به صورت خلاصه و خودمونی به سبک نسل Z صحبت کن."
     
     chat_history.append({"role": "user", "content": user_message})
     context.user_data["chat_history"] = chat_history
     
-    # Updated payload structure for Pollinations API
-    payload = {
-        "prompt": f"{system_message}\n\nUser: {user_message}\n\nAssistant:",
-        "model": "openai-large",
-        "max_tokens": 500,
-        "temperature": 0.7
-    }
-    
-    keyboard = [[InlineKeyboardButton("🏠 Back to Home", callback_data="back_to_home")]]
+    keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     try:
-        response = requests.post(TEXT_API_URL, json=payload, timeout=30)
-        if response.status_code == 200:
-            ai_response = clean_text(response.text.strip())
+        response = None
+        for attempt in range(3):
+            try:
+                response = requests.get(
+                    url=MAJID_AI_URL,
+                    params={
+                        "q": prompt,
+                        "token": MAJID_AI_TOKEN,
+                    },
+                    timeout=30
+                )
+                response.raise_for_status()
+                break
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 429:
+                    if attempt < 2:
+                        logger.warning(f"Rate limit hit (429), retrying in {2 * (attempt + 1)} seconds...")
+                        await asyncio.sleep(2 * (attempt + 1))
+                        continue
+                raise e
+        
+        if not response:
+             raise Exception("Max retries reached")
+             
+        ai_response = None
+        try:
+            data = response.json()
+            if isinstance(data, dict):
+                for key in ("response", "result", "answer", "message", "output", "data", "text"):
+                    value = data.get(key)
+                    if isinstance(value, str) and value.strip():
+                        ai_response = value.strip()
+                        break
+                if ai_response is None and data:
+                    for value in data.values():
+                        if isinstance(value, str) and value.strip():
+                            ai_response = value.strip()
+                            break
+            elif isinstance(data, list) and data:
+                string_parts = [str(item).strip() for item in data if str(item).strip()]
+                if string_parts:
+                    ai_response = " ".join(string_parts)
+        except ValueError:
+            logger.debug("Majid API did not return JSON, falling back to raw text.")
+        
+        if not ai_response:
+            ai_response = response.text.strip()
+        
+        if ai_response:
+            ai_response = clean_text(ai_response)
             chat_history.append({"role": "assistant", "content": ai_response})
             context.user_data["chat_history"] = chat_history
             await update.message.reply_text(ai_response, reply_markup=reply_markup)
         else:
-            logger.error(f"API Error: {response.status_code} - {response.text}")
+            logger.error(f"Empty response from Majid AI API")
             await update.message.reply_text(
                 clean_text("اوفف، یه مشکلی پیش اومد! 😅 فکر کنم API یه کم خوابش برده! بعداً امتحان کن 🚀"),
                 reply_markup=reply_markup
             )
     except Exception as e:
-        logger.error(f"خطا در اتصال به API چت: {e}")
+        try:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            preview = None
+            resp = getattr(e, "response", None)
+            if resp is not None:
+                try:
+                    preview = resp.text[:500]
+                except Exception:
+                    preview = None
+            logger.error(f"خطا در اتصال به API چت: {type(e).__name__}: {e}, status={status}, resp_preview={preview}")
+        except Exception:
+            logger.error("خطا در اتصال به API چت")
         await update.message.reply_text(
             clean_text("اییی، یه خطا خوردم! 😭 بعداً دوباره بیا، قول می‌دم درستش کنم! 🚀"),
             reply_markup=reply_markup
@@ -2571,6 +2132,9 @@ async def handle_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+        
     message_id = update.message.message_id
     async with PROCESSING_LOCK:
         if message_id in PROCESSED_MESSAGES:
@@ -2608,34 +2172,86 @@ async def handle_group_ai_message(update: Update, context: ContextTypes.DEFAULT_
     user_history.append({"role": "user", "content": user_message})
     context.user_data["group_chat_history"] = user_history
     
-    # Prepare the system message with user information
-    system_message = SYSTEM_MESSAGE
+    # Build a short prompt - only send user message to avoid URI too long error
+    # Include user name if available
     if user_fullname:
-        system_message = f"نام و نام خانوادگی کاربر: {user_fullname}\n" + SYSTEM_MESSAGE + "\nلطفا در پاسخ‌های خود از نام کاربر استفاده کنید و اگر نام انگلیسی است به فارسی تبدیل کنید."
-    
-    # Updated payload structure for Pollinations API
-    payload = {
-        "prompt": f"{system_message}\n\nUser: {user_message}\n\nAssistant:",
-        "model": "openai-large",
-        "max_tokens": 500,
-        "temperature": 0.7
-    }
+        prompt = f"کاربر {user_fullname} می‌پرسد: {user_message}\n\nشما دستیار هوشمند PatoBot هستی که به کاربران کمک می‌کنی که از اپلیکیشن Plato مشکلی داشتند کمکشون کنی. خیلی کوتاه صحبت کن، اگر نیاز بود توضیح بده. به صورت خلاصه و خودمونی به سبک نسل Z صحبت کن."
+    else:
+        prompt = f"سوال: {user_message}\n\nشما دستیار هوشمند PatoBot هستی که به کاربران کمک می‌کنی که از اپلیکیشن Plato مشکلی داشتند کمکشون کنی. خیلی کوتاه صحبت کن، اگر نیاز بود توضیح بده. به صورت خلاصه و خودمونی به سبک نسل Z صحبت کن."
     
     try:
-        response = requests.post(TEXT_API_URL, json=payload, timeout=30)
-        if response.status_code == 200:
-            ai_response = clean_text(response.text.strip())
+        response = None
+        for attempt in range(3):
+            try:
+                response = requests.get(
+                    url=MAJID_AI_URL,
+                    params={
+                        "q": prompt,
+                        "token": MAJID_AI_TOKEN,
+                    },
+                    timeout=30
+                )
+                response.raise_for_status()
+                break
+            except requests.exceptions.HTTPError as e:
+                if e.response.status_code == 429:
+                    if attempt < 2:
+                        logger.warning(f"Rate limit hit (429) in group chat, retrying in {2 * (attempt + 1)} seconds...")
+                        await asyncio.sleep(2 * (attempt + 1))
+                        continue
+                raise e
+        
+        if not response:
+             raise Exception("Max retries reached")
+             
+        ai_response = None
+        try:
+            data = response.json()
+            if isinstance(data, dict):
+                for key in ("response", "result", "answer", "message", "output", "data", "text"):
+                    value = data.get(key)
+                    if isinstance(value, str) and value.strip():
+                        ai_response = value.strip()
+                        break
+                if ai_response is None and data:
+                    for value in data.values():
+                        if isinstance(value, str) and value.strip():
+                            ai_response = value.strip()
+                            break
+            elif isinstance(data, list) and data:
+                string_parts = [str(item).strip() for item in data if str(item).strip()]
+                if string_parts:
+                    ai_response = " ".join(string_parts)
+        except ValueError:
+            logger.debug("Majid API did not return JSON, falling back to raw text.")
+        
+        if not ai_response:
+            ai_response = response.text.strip()
+        
+        if ai_response:
+            ai_response = clean_text(ai_response)
             user_history.append({"role": "assistant", "content": ai_response})
             context.user_data["group_chat_history"] = user_history
             await update.message.reply_text(ai_response, message_thread_id=thread_id)
         else:
-            logger.error(f"API Error: {response.status_code} - {response.text}")
+            logger.error(f"Empty response from Majid AI API")
             await update.message.reply_text(
                 clean_text("مشکلی پیش اومد! 😅 بعداً دوباره امتحان کن 🚀"),
                 message_thread_id=thread_id
             )
     except Exception as e:
-        logger.error(f"خطا در اتصال به API چت گروه: {e}")
+        try:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            preview = None
+            resp = getattr(e, "response", None)
+            if resp is not None:
+                try:
+                    preview = resp.text[:500]
+                except Exception:
+                    preview = None
+            logger.error(f"خطا در اتصال به API چت گروه: {type(e).__name__}: {e}, status={status}, resp_preview={preview}")
+        except Exception:
+            logger.error("خطا در اتصال به API چت گروه")
         await update.message.reply_text(
             clean_text("خطایی رخ داد! 😭 بعداً دوباره امتحان کن 🚀"),
             message_thread_id=thread_id
@@ -2657,15 +2273,271 @@ async def back_to_home(update: Update, context: ContextTypes.DEFAULT_TYPE):
         AI_CHAT_USERS.remove(user_id)
     context.user_data.clear()
     welcome_message = clean_text(
-        "🏠 به منوی اصلی خوش اومدی!\n\nچی دوست داری انجام بدیم؟ 😎"
+        "🏠 به منوی اصلی برگشتی!\n\n"
+        "✨ چی می‌خوای انجام بدیم؟\n\n"
+        "🔍 سرچ آیتم‌ها\n"
+        "🤖 چت با هوش مصنوعی\n"
+        "🔧 ابزارهای کاربردی\n"
+        "📱 مینی اپلیکیشن\n\n"
+        "یکی رو انتخاب کن 👇"
     )
     keyboard = [
-        [InlineKeyboardButton("Run App 📱", web_app={"url": "https://v0-gram-file-mini-app.vercel.app"})],
-        [InlineKeyboardButton("Search Items 🔍", callback_data="search_items")],
-        [InlineKeyboardButton("Chat with AI 🤖", callback_data="chat_with_ai")],
-        [InlineKeyboardButton("Generate Image 🖼️", callback_data="generate_image")]
+        [InlineKeyboardButton("📱 اجرا مینی اپ", web_app={"url": "https://v0-item-extractor-app.vercel.app"})],
+        [
+            InlineKeyboardButton("🔍 سرچ آیتم", callback_data="search_items"),
+            InlineKeyboardButton("🤖 چت با هوش مصنوعی", callback_data="chat_with_ai")
+        ],
+        [InlineKeyboardButton("🔧 ابزارها", callback_data="tools_menu")]
     ]
-    await query.edit_message_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
+    # سعی می‌کنیم ویرایش کنیم، اگر نشد پیام جدید می‌فرستیم
+    try:
+        await query.edit_message_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
+    except Exception:
+        await query.message.reply_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
+    return ConversationHandler.END
+
+async def back_to_home_from_result(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """بازگشت به خانه بدون پاک کردن عکس"""
+    query = update.callback_query
+    await query.answer()
+    user_id = update.effective_user.id
+    if user_id in AI_CHAT_USERS:
+        AI_CHAT_USERS.remove(user_id)
+    context.user_data.clear()
+    welcome_message = clean_text(
+        "🏠 به منوی اصلی برگشتی!\n\n"
+        "✨ چی می‌خوای انجام بدیم؟\n\n"
+        "🔍 سرچ آیتم‌ها\n"
+        "🤖 چت با هوش مصنوعی\n"
+        "🔧 ابزارهای کاربردی\n"
+        "📱 مینی اپلیکیشن\n\n"
+        "یکی رو انتخاب کن 👇"
+    )
+    keyboard = [
+        [InlineKeyboardButton("📱 اجرا مینی اپ", web_app={"url": "hhttps://v0-item-extractor-app.vercel.app"})],
+        [
+            InlineKeyboardButton("🔍 سرچ آیتم", callback_data="search_items"),
+            InlineKeyboardButton("🤖 چت با هوش مصنوعی", callback_data="chat_with_ai")
+        ],
+        [InlineKeyboardButton("🔧 ابزارها", callback_data="tools_menu")]
+    ]
+    # ارسال پیام جدید به جای ویرایش
+    await query.message.reply_text(welcome_message, reply_markup=InlineKeyboardMarkup(keyboard))
+    return ConversationHandler.END
+
+async def tools_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """نمایش منوی ابزارها"""
+    query = update.callback_query
+    await query.answer()
+    keyboard = [
+        [InlineKeyboardButton("🖼️ حذف بک‌گراند", callback_data="remove_background")],
+        [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]
+    ]
+    try:
+        await query.edit_message_text(
+            clean_text("🔧 منوی ابزارها\n\nیکی از ابزارها رو انتخاب کن:"),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception:
+        await query.message.reply_text(
+            clean_text("🔧 منوی ابزارها\n\nیکی از ابزارها رو انتخاب کن:"),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+
+async def start_remove_background(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """شروع فرآیند حذف بک‌گراند"""
+    query = update.callback_query
+    await query.answer()
+    keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
+    # اگر پیام قبلی عکس باشه، پیام جدید می‌فرستیم
+    try:
+        await query.edit_message_text(
+            clean_text("🖼️ حذف بک‌گراند عکس\n\nلطفاً عکسی که می‌خوای بک‌گراندش حذف بشه رو بفرست:"),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception:
+        # اگر ویرایش نشد (مثلاً پیام قبلی عکس بوده)، پیام جدید می‌فرستیم
+        await query.message.reply_text(
+            clean_text("🖼️ حذف بک‌گراند عکس\n\nلطفاً عکسی که می‌خوای بک‌گراندش حذف بشه رو بفرست:"),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    return WAIT_FOR_PHOTO
+
+async def handle_photo_for_background_removal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دریافت و پردازش عکس برای حذف بک‌گراند"""
+    if not update.message:
+        return WAIT_FOR_PHOTO
+    
+    # بررسی اینکه آیا عکس به صورت photo یا document فرستاده شده
+    photo = None
+    if update.message.photo:
+        # دریافت بزرگترین سایز عکس
+        photo = update.message.photo[-1]
+    elif update.message.document and update.message.document.mime_type and update.message.document.mime_type.startswith('image/'):
+        # اگر عکس به صورت document فرستاده شده
+        photo = update.message.document
+    
+    if not photo:
+        await update.message.reply_text(clean_text("لطفاً یک عکس بفرست!"))
+        return WAIT_FOR_PHOTO
+    
+    loading_message = await update.message.reply_text(clean_text("⏳"))
+    
+    try:
+        # دریافت فایل عکس از تلگرام
+        file = await context.bot.get_file(photo.file_id)
+        logger.info(f"File path از تلگرام: {file.file_path}")
+        
+        # دانلود عکس به صورت بایت
+        photo_bytes = await file.download_as_bytearray()
+        logger.info(f"عکس دانلود شد - اندازه: {len(photo_bytes)} بایت")
+        
+        # آپلود عکس به یک سرویس موقت برای دسترسی API
+        file_url = None
+        
+        # روش 1: آپلود به transfer.sh
+        try:
+            upload_response = requests.put(
+                f'https://transfer.sh/image_{int(time.time())}.jpg',
+                data=photo_bytes,
+                headers={'Max-Downloads': '1', 'Max-Days': '1'}
+            )
+            if upload_response.status_code == 200:
+                file_url = upload_response.text.strip()
+                logger.info(f"فایل با موفقیت آپلود شد به transfer.sh: {file_url}")
+            else:
+                raise Exception(f"خطا در آپلود به transfer.sh: {upload_response.status_code}")
+        except Exception as upload_error:
+            logger.warning(f"خطا در آپلود به transfer.sh: {upload_error}")
+            # روش 2: آپلود به tmpfiles.org
+            try:
+                upload_response = requests.post(
+                    'https://tmpfiles.org/api/v1/upload',
+                    files={'file': ('image.jpg', photo_bytes, 'image/jpeg')}
+                )
+                if upload_response.status_code == 200:
+                    upload_data = upload_response.json()
+                    if upload_data.get('status') == 'success':
+                        file_url = upload_data['data']['url'].replace('tmpfiles.org/', 'tmpfiles.org/dl/')
+                        logger.info(f"فایل با موفقیت آپلود شد به tmpfiles.org: {file_url}")
+                    else:
+                        raise Exception("آپلود فایل به tmpfiles.org ناموفق بود")
+                else:
+                    raise Exception(f"خطا در آپلود به tmpfiles.org: {upload_response.status_code}")
+            except Exception as upload_error2:
+                logger.warning(f"خطا در آپلود به tmpfiles.org: {upload_error2}")
+                # روش 3: استفاده از URL فایل تلگرام (اصلاح شده)
+                photo_path = file.file_path
+                # بررسی اینکه آیا path کامل هست یا نسبی
+                # اگر path با http شروع بشه، یعنی URL کامل هست
+                if photo_path and photo_path.startswith('http'):
+                    file_url = photo_path
+                    logger.warning(f"استفاده از URL کامل فایل تلگرام: {file_url}")
+                elif photo_path:
+                    # اگر path نسبی باشه، URL کامل می‌سازیم
+                    # حذف هرگونه URL قبلی که ممکنه در path باشه
+                    clean_path = photo_path.replace(f'https://api.telegram.org/file/bot{TOKEN}/', '')
+                    file_url = f"https://api.telegram.org/file/bot{TOKEN}/{clean_path}"
+                    logger.warning(f"استفاده از URL فایل تلگرام (ساخته شده): {file_url}")
+                else:
+                    raise Exception("نمی‌توان path فایل را دریافت کرد")
+        
+        if not file_url:
+            raise Exception("نمی‌توان URL فایل را دریافت کرد")
+        
+        # URL encode کردن آدرس فایل
+        encoded_url = quote(file_url, safe='')
+        
+        # فراخوانی API برای حذف بک‌گراند با retry
+        api_url = f"https://api.majidapi.ir/image/remove-background?url={encoded_url}&out=photo&token={MAJID_AI_TOKEN}"
+        
+        logger.info(f"درخواست به API (بدون token در لاگ): {api_url.split('token=')[0]}...")
+        
+        # تلاش برای فراخوانی API با retry
+        max_retries = 3
+        response = None
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(api_url, timeout=120)  # افزایش timeout به 120 ثانیه
+                logger.info(f"پاسخ API - Status: {response.status_code}, Attempt: {attempt + 1}")
+                if response.status_code == 200:
+                    logger.info(f"پاسخ موفق - Content-Type: {response.headers.get('Content-Type')}, Size: {len(response.content)}")
+                    break
+                else:
+                    logger.warning(f"پاسخ ناموفق - Status: {response.status_code}, Response: {response.text[:200]}")
+            except requests.exceptions.Timeout:
+                logger.warning(f"Timeout در تلاش {attempt + 1}")
+                if attempt < max_retries - 1:
+                    await context.bot.edit_message_text(
+                        chat_id=update.effective_chat.id,
+                        message_id=loading_message.message_id,
+                        text=clean_text(f"⏳ در حال پردازش عکس... (تلاش {attempt + 2}/{max_retries})")
+                    )
+                    await asyncio.sleep(2)  # صبر 2 ثانیه قبل از تلاش مجدد
+                else:
+                    raise
+            except Exception as e:
+                logger.error(f"خطا در تلاش {attempt + 1}: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2)
+                else:
+                    raise
+        
+        if response and response.status_code == 200:
+            # حذف پیام لودینگ
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=loading_message.message_id
+            )
+            
+            # ذخیره عکس پردازش شده
+            processed_image = io.BytesIO(response.content)
+            processed_image.name = "no_background.png"
+            
+            keyboard = [
+                [InlineKeyboardButton("🔄 عکس دیگه", callback_data="remove_background")],
+                [InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home_from_result")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # ارسال عکس به صورت فایل (بدون دکمه)
+            await update.message.reply_document(
+                document=InputFile(processed_image, filename="no_background.png"),
+                caption=clean_text("✅ بک‌گراند عکس با موفقیت حذف شد!")
+            )
+            
+            # ارسال عکس به صورت عکس (برای پیش‌نمایش) با دکمه‌ها
+            processed_image.seek(0)  # بازگشت به ابتدای فایل
+            await update.message.reply_photo(
+                photo=InputFile(processed_image, filename="no_background.png"),
+                caption=clean_text("📷 پیش‌نمایش:"),
+                reply_markup=reply_markup
+            )
+        else:
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=loading_message.message_id
+            )
+            keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
+            await update.message.reply_text(
+                clean_text("❌ مشکلی در پردازش عکس پیش آمد. لطفاً دوباره امتحان کنید."),
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+    except Exception as e:
+        logger.error(f"خطا در حذف بک‌گراند: {e}")
+        try:
+            await context.bot.delete_message(
+                chat_id=update.effective_chat.id,
+                message_id=loading_message.message_id
+            )
+        except:
+            pass
+        keyboard = [[InlineKeyboardButton("🏠 بازگشت به خانه", callback_data="back_to_home")]]
+        await update.message.reply_text(
+            clean_text("❌ خطایی رخ داد. لطفاً بعداً امتحان کنید."),
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
     return ConversationHandler.END
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2760,46 +2632,36 @@ async def main():
                 persistent=False
             )
 
-            image_conv_handler = ConversationHandler(
+            remove_background_conv_handler = ConversationHandler(
                 entry_points=[
-                    CallbackQueryHandler(start_generate_image, pattern="^generate_image$"),
-                    CallbackQueryHandler(retry_generate_image, pattern="^retry_generate_image$")
+                    CallbackQueryHandler(start_remove_background, pattern="^remove_background$")
                 ],
                 states={
-                    SELECT_SIZE: [CallbackQueryHandler(select_size, pattern="^size_")],
-                    GET_PROMPT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_prompt)]
+                    WAIT_FOR_PHOTO: [
+                        MessageHandler(filters.PHOTO | (filters.Document.IMAGE), handle_photo_for_background_removal)
+                    ]
                 },
                 fallbacks=[
                     CommandHandler("cancel", cancel),
                     CommandHandler("start", start),
                     CallbackQueryHandler(back_to_home, pattern="^back_to_home$")
                 ],
-                name="image_generation",
+                name="remove_background",
                 persistent=False
             )
-
-            group_image_conv_handler = ConversationHandler(
-                entry_points=[
-                    CommandHandler("p", start_group_image, filters=filters.ChatType.GROUPS),
-                    CallbackQueryHandler(regenerate_group_image, pattern="^regenerate_image_")
-                ],
-                states={},
-                fallbacks=[
-                    CommandHandler("cancel", cancel),
-                    CommandHandler("start", start)
-                ],
-                name="group_image_generation",
-                persistent=False
-            )
-
+            
+            application.add_handler(search_conv_handler)
+            application.add_handler(remove_background_conv_handler)
+            
+            # Handler های ساده باید بعد از ConversationHandler ها باشن تا fallbacks درست کار کنند
+            application.add_handler(CallbackQueryHandler(back_to_home, pattern="^back_to_home$"))
+            application.add_handler(CallbackQueryHandler(back_to_home_from_result, pattern="^back_to_home_from_result$"))
+            application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
+            application.add_handler(CallbackQueryHandler(tools_menu, pattern="^tools_menu$"))
             application.add_handler(CommandHandler("start", start))
             application.add_handler(CommandHandler("cancel", cancel))
-            application.add_handler(CallbackQueryHandler(chat_with_ai, pattern="^chat_with_ai$"))
-            application.add_handler(search_conv_handler)
-            application.add_handler(image_conv_handler)
-            application.add_handler(group_image_conv_handler)
             application.add_handler(InlineQueryHandler(inline_query))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r'^@PlatoDex\s+\w+'), handle_inline_selection))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.Regex(r'^@platodex\s+\w+'), handle_inline_selection))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_ai_message))
             application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS, handle_group_ai_message))
             # Add group message handler for general group messages (not AI chat)
